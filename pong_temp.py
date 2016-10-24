@@ -24,7 +24,7 @@ class Conv_NN(Chain):
         super(Conv_NN, self).__init__(
             conv=L.Convolution2D(1, 1, 3, pad=1),
             fully_conn_1 = L.Linear(1600,200),
-            fully_conn_2 = L.Linear(200,1),
+            fully_conn_2 = L.Linear(200,3),
         )
 
     def __call__(self, x_data):
@@ -32,7 +32,7 @@ class Conv_NN(Chain):
         output = F.relu(self.conv(output))
         output = F.max_pooling_2d(output, 2, 2)
         output = F.sigmoid(self.fully_conn_1(output))
-        output = F.sigmoid(self.fully_conn_2(output))
+        output = F.softmax(self.fully_conn_2(output))
         return output
 
 def process_observation(observation):
@@ -55,6 +55,9 @@ def discount_rewards(r):
             running_add = 0
         running_add = running_add * 0.99 + r[t]
         discounted_r[t] = running_add
+    
+    discounted_r -= np.mean(discounted_r)
+    discounted_r /= np.std(discounted_r)
     return discounted_r
 
 def main():
@@ -79,7 +82,7 @@ def main():
     reward = 0
     input_history, fake_label_history, reward_history = [], [], []
     previous_observation_processed = None
-    fake_label_sum = 0
+    fake_label_sum = np.zeros(3)
     fake_label_len = 0
     num_of_games = 0
 
@@ -100,8 +103,10 @@ def main():
             input_data = cuda.to_gpu(input_data)
 
         output_prop = model(input_data)
-        action = 2 if np.random.uniform() < output_prop.data else 3  
-        fake_label = 1 if action == 2 else 0
+        # action = 2 if np.random.uniform() < output_prop.data else 3  
+        action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data[0])
+        fake_label = np.zeros(3)
+        fake_label[max([action - 1, 0])] = 1
         input_history.append(input_data)
         fake_label_history.append(fake_label)
 
@@ -109,7 +114,6 @@ def main():
             # discount = float(1 - discount_rate) / (1 - discount_rate ** len(fake_label_history))
             # discount = 1
             num_of_games += 1
-
             fake_label_sum += sum(fake_label_history)
             fake_label_len += len(fake_label_history)
             previous_observation_processed = None
@@ -118,8 +122,9 @@ def main():
         reward_history.append(reward)
         reward_sum += reward
         if done:
-            print "epoch #%d, reward_sum = %f, average_prop = %f" % \
-                    (index_epoch, reward_sum, float(fake_label_sum) / fake_label_len)
+            # print fake_label_sum, fake_label_len
+            print "epoch #%d, reward_sum = %f, average_prop = %s" % \
+                    (index_epoch, reward_sum, str(fake_label_sum / fake_label_len))
 
             if index_epoch % 100 == 0 and index_epoch != 0:
                 pickle.dump(model, open('excited_%d.pkl' % index_epoch, 'wb'))
@@ -138,7 +143,7 @@ def main():
                 num_of_games = 0
                 input_history, fake_label_history, reward_history = [], [], []
                 
-            fake_label_sum = 0
+            fake_label_sum = np.zeros(3)
             fake_label_len = 0
             reward_sum = 0
             observation = env.reset()
