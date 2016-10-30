@@ -128,12 +128,19 @@ def main():
                 print "average num of frames = %f" % (len(fake_label_history) / float(num_of_games))
                 print "updating..."
                 input_history = np.vstack(input_history).astype(np.float32)
-                output_prop = model(input_history)
                 discounted_reward_history = np.array(discount_rewards(np.array(reward_history))).astype(np.float32)
-                diff =  np.multiply((output_prop.data - np.vstack(fake_label_history).astype(np.float32)), \
-                        discounted_reward_history.reshape(len(fake_label_history), 1))
-                output_prop.grad = - diff if args.reverse_grad else diff
-                output_prop.backward()
+                fake_label_history = np.vstack(fake_label_history).astype(np.float32)
+                num_splits = 10
+                len_of_each_split = input_history.shape[0] / num_splits
+                for _1 in range(num_splits):
+                    start_index = _1 * len_of_each_split
+                    end_index = (_1 + 1) * len_of_each_split
+                    output_prop = model(input_history[start_index:end_index])
+                    diff =  np.multiply((output_prop.data - fake_label_history[start_index:end_index]), \
+                            discounted_reward_history[start_index:end_index].reshape(len(fake_label_history[start_index:end_index]), 1))
+                    output_prop.grad = - diff if args.reverse_grad else diff
+                    output_prop.backward()         # grad is accumulated
+
                 optimizer.update()
                 model.cleargrads()
                 num_of_games = 0
