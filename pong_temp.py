@@ -15,22 +15,21 @@ parser.add_argument("--resume_file", type=str, default=None)
 # parser.add_argument("--resume_pkl_file", type=str, default='temp.pkl')
 parser.add_argument("--render", type=int, default=0)
 parser.add_argument("--reverse_grad", type=int, default=0)
-parser.add_argument("--input", type=str, default="diff")
 parser.add_argument("--batch_size", type=int, default=10)
 args = parser.parse_args()
 
 class Conv_NN(Chain):
     def __init__(self):
         super(Conv_NN, self).__init__(
-            conv=L.Convolution2D(1, 1, 3, pad=1),
-            fully_conn_1 = L.Linear(1600,200),
+            conv=L.Convolution2D(4, 1, 3, pad=1),
+            fully_conn_1 = L.Linear(6400,200),
             fully_conn_2 = L.Linear(200,3),
         )
 
     def __call__(self, x_data):
         output = Variable(x_data)
         output = F.relu(self.conv(output))
-        output = F.max_pooling_2d(output, 2, 2)
+        # output = F.max_pooling_2d(output, 2, 2)
         output = F.sigmoid(self.fully_conn_1(output))
         output = F.softmax(self.fully_conn_2(output))
         return output
@@ -43,7 +42,6 @@ def process_observation(observation):
     observation[observation != 0] = 1  # everything else (paddles, ball) just set to 1
     observation = np.array([[observation[::2,::2,0]]]).astype(np.float32)
     return observation
-    # return np.array([np.rollaxis((observation / 256.0).astype(np.float32), 2)])
 
 def discount_rewards(r):
     """ take 1D float array of rewards and compute discounted reward """
@@ -85,19 +83,16 @@ def main():
     fake_label_sum = np.zeros(3)
     fake_label_len = 0
     num_of_games = 0
+    input_data = np.zeros((1, 4, 80, 80)).astype(np.float32)
+    # input_data = np.array(range(256)).reshape(1,4,8,8)
 
     while True:
         if render:
             env.render()
         observation_processed = process_observation(observation)
-        if args.input == 'diff':
-            input_data = observation_processed - previous_observation_processed if not previous_observation_processed is None\
-                    else observation_processed - observation_processed
-            previous_observation_processed = observation_processed
-        elif args.input == 'raw':
-            input_data = observation_processed
-        else:
-            raise Exception('wrong parameter')
+        input_data = np.roll(input_data, -1, axis=1)
+        input_data[-1] = observation_processed
+        # print input_data
         
         if gpu_on:
             input_data = cuda.to_gpu(input_data)
@@ -132,7 +127,8 @@ def main():
             if index_epoch % args.batch_size == 0 and index_epoch != 0:  
                 print "average num of frames = %f" % (len(fake_label_history) / float(num_of_games))
                 print "updating..."
-                output_prop = model(np.vstack(input_history).astype(np.float32))
+                input_history = np.vstack(input_history).astype(np.float32)
+                output_prop = model(input_history)
                 discounted_reward_history = np.array(discount_rewards(np.array(reward_history))).astype(np.float32)
                 diff =  np.multiply((output_prop.data - np.vstack(fake_label_history).astype(np.float32)), \
                         discounted_reward_history.reshape(len(fake_label_history), 1))
