@@ -7,12 +7,12 @@ from chainer import Link, Chain, ChainList
 import chainer.functions as F
 import chainer.links as L
 import copy
+import time
 
 parser = argparse.ArgumentParser()
 # parser.add_argument("starting_running_reward", type=float)
 parser.add_argument("--lr", type=float, default=0.0005)
 parser.add_argument("--resume_file", type=str, default=None)
-# parser.add_argument("--resume_pkl_file", type=str, default='temp.pkl')
 parser.add_argument("--render", type=int, default=0)
 parser.add_argument("--reverse_grad", type=int, default=0)
 parser.add_argument("--batch_size", type=int, default=10)
@@ -21,15 +21,16 @@ args = parser.parse_args()
 class Conv_NN(Chain):
     def __init__(self):
         super(Conv_NN, self).__init__(
-            conv=L.Convolution2D(4, 1, 3, pad=1),
-            fully_conn_1 = L.Linear(6400,200),
+            conv_1=L.Convolution2D(4, 4, 3, stride=2, pad=1),
+            conv_2=L.Convolution2D(4, 4, 3, stride=2, pad=1),
+            fully_conn_1 = L.Linear(1600,200),
             fully_conn_2 = L.Linear(200,3),
         )
 
     def __call__(self, x_data):
         output = Variable(x_data)
-        output = F.relu(self.conv(output))
-        # output = F.max_pooling_2d(output, 2, 2)
+        output = F.relu(self.conv_1(output))
+        output = F.relu(self.conv_2(output))
         output = F.sigmoid(self.fully_conn_1(output))
         output = F.softmax(self.fully_conn_2(output))
         return output
@@ -85,14 +86,16 @@ def main():
     num_of_games = 0
     input_data = np.zeros((1, 4, 80, 80)).astype(np.float32)
     # input_data = np.array(range(256)).reshape(1,4,8,8)
+    image_index = 0
 
     while True:
         if render:
             env.render()
         observation_processed = process_observation(observation)
         input_data = np.roll(input_data, -1, axis=1)
-        input_data[-1] = observation_processed
-        # print input_data
+        input_data[0][-1] = observation_processed[0]
+        # print np.sum(input_data[0][3]), np.sum(input_data[0][1])
+        # time.sleep(0.5)
         
         if gpu_on:
             input_data = cuda.to_gpu(input_data)
