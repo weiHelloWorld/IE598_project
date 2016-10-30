@@ -10,7 +10,7 @@ import copy
 import time
 
 parser = argparse.ArgumentParser()
-# parser.add_argument("starting_running_reward", type=float)
+parser.add_argument("--starting_running_reward", type=float, default=-21.0)
 parser.add_argument("--lr", type=float, default=0.0005)
 parser.add_argument("--resume_file", type=str, default=None)
 parser.add_argument("--render", type=int, default=0)
@@ -21,9 +21,9 @@ args = parser.parse_args()
 class Conv_NN(Chain):
     def __init__(self):
         super(Conv_NN, self).__init__(
-            conv_1=L.Convolution2D(4, 4, 3, stride=2, pad=1),
-            conv_2=L.Convolution2D(4, 4, 3, stride=2, pad=1),
-            fully_conn_1 = L.Linear(1600,200),
+            conv_1=L.Convolution2D(4, 4, 8, stride=2, pad=1),
+            conv_2=L.Convolution2D(4, 4, 8, stride=1, pad=1),
+            fully_conn_1 = L.Linear(4356,200),
             fully_conn_2 = L.Linear(200,3),
         )
 
@@ -63,6 +63,8 @@ def main():
     env = gym.make("Pong-v0")
     gpu_on = 0
     observation = env.reset()
+    running_reward = args.starting_running_reward
+    print "starting_running_reward = %f" % running_reward
     if args.resume_file is None:
         model = Conv_NN()
     else:
@@ -93,7 +95,7 @@ def main():
             env.render()
         observation_processed = process_observation(observation)
         input_data = np.roll(input_data, -1, axis=1)
-        input_data[0][-1] = observation_processed[0]
+        input_data[0][-1][:] = observation_processed[0]
         # print np.sum(input_data[0][3]), np.sum(input_data[0][1])
         # time.sleep(0.5)
         
@@ -112,17 +114,17 @@ def main():
             # discount = float(1 - discount_rate) / (1 - discount_rate ** len(fake_label_history))
             # discount = 1
             num_of_games += 1
-            fake_label_sum += sum(fake_label_history)
-            fake_label_len += len(fake_label_history)
-            previous_observation_processed = None
-        
+                
         observation, reward, done, info = env.step(action)
         reward_history.append(reward)
         reward_sum += reward
         if done:
+            fake_label_sum += sum(fake_label_history)
+            fake_label_len += len(fake_label_history)
             # print fake_label_sum, fake_label_len
-            print "epoch #%d, reward_sum = %f, average_prop = %s" % \
-                    (index_epoch, reward_sum, str(fake_label_sum / fake_label_len))
+            running_reward = running_reward * 0.99 + reward_sum * 0.01
+            print "epoch #%d, reward_sum = %f, running_reward = %f, average_prop = %s" % \
+                    (index_epoch, reward_sum, running_reward, str(fake_label_sum / fake_label_len))
 
             if index_epoch % 100 == 0 and index_epoch != 0:
                 pickle.dump(model, open('excited_%d.pkl' % index_epoch, 'wb'))
@@ -133,7 +135,7 @@ def main():
                 input_history = np.vstack(input_history).astype(np.float32)
                 discounted_reward_history = np.array(discount_rewards(np.array(reward_history))).astype(np.float32)
                 fake_label_history = np.vstack(fake_label_history).astype(np.float32)
-                num_splits = 10
+                num_splits = 20
                 len_of_each_split = input_history.shape[0] / num_splits
                 for _1 in range(num_splits):
                     start_index = _1 * len_of_each_split
