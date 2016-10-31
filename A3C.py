@@ -21,32 +21,44 @@ def discount_rewards(r, initial_v_value):
     return discounted_r
 
 class A3C(object):
-    def __init__(self, cnn_net=None, policy_net=None, value_net=None):
+    def __init__(self, cnn_net=None, policy_net=None, value_net=None, 
+                 optimizer_p=None, optimizer_v=None):
         if cnn_net is None: cnn_net = CNN()
         if policy_net is None: policy_net = Policy_net()
         if value_net is None: value_net = Value_net()
+        if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr, alpha=0.99, eps=1e-08)
+        if optimizer_v is None: optimizer_v = optimizers.RMSprop(lr=args.lr, alpha=0.99, eps=1e-08)
 
         self._cnn_net = cnn_net
         self._policy_net = policy_net
         self._value_net = value_net
+        self._optimizer_p = optimizer_p
+        self._optimizer_v = optimizer_v     # FIXME: do we need two optimizers?
+        self._optimizer_p.setup(self._policy_net)
+        self._optimizer_v.setup(self._value_net)
         return
 
-    def cleargrads():
-    	self._cnn_net.cleargrads()
-    	self._policy_net.cleargrads()
-    	self._value_net.cleargrads()
-    	return
+    def cleargrads(self):
+        self._cnn_net.cleargrads()
+        self._policy_net.cleargrads()
+        self._value_net.cleargrads()
+        return
 
-   	def get_policy():
-   		pass
+    def get_policy(self, input_data):
+        return self._policy_net(self._cnn_net(Variable(input_data)))
 
-   	def get_value():
-   		pass
+    def get_value(self, input_data):
+        return self._value_net(self._cnn_net(Variable(input_data)))
+
+    def update(self):
+        self._optimizer_p.update()
+        self._optimizer_v.update()
+        return
 
 
 class CNN(Chain):
     def __init__(self):
-        super(Conv_NN, self).__init__(
+        super(CNN, self).__init__(
             conv_1=L.Convolution2D(4, 4, 8, stride=2, pad=1),
             conv_2=L.Convolution2D(4, 4, 8, stride=1, pad=1)
         )
@@ -71,7 +83,7 @@ def process_observation(observation):
         
 class Policy_net(Chain):
     def __init__(self):
-        super(Conv_NN, self).__init__(
+        super(Policy_net, self).__init__(
             fully_conn_1 = L.Linear(4356,200),
             fully_conn_2 = L.Linear(200,3)
         )
@@ -84,7 +96,7 @@ class Policy_net(Chain):
 
 class Value_net(Chain):
     def __init__(self):
-        super(Conv_NN, self).__init__(
+        super(Value_net, self).__init__(
             fully_conn_1 = L.Linear(4356,200),
             fully_conn_2 = L.Linear(200,3)
         )
@@ -113,14 +125,13 @@ def main():
     render = args.render
     index_epoch = 0
     discount_rate = 0.99
-    optimizer = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=1e-08)
-    optimizer.setup(model)
+    
     reward_sum = 0
     reward = 0
-    input_history, fake_label_history, reward_history = [], [], []
+    input_history, action_label_history, reward_history = [], [], []
     previous_observation_processed = None
-    fake_label_sum = np.zeros(3)
-    fake_label_len = 0
+    action_label_sum = np.zeros(3)
+    action_label_len = 0
     num_of_games = 0
     input_data = np.zeros((1, 4, 80, 80)).astype(np.float32)
     # input_data = np.array(range(256)).reshape(1,4,8,8)
@@ -140,13 +151,13 @@ def main():
         if gpu_on:
             input_data = cuda.to_gpu(input_data)
 
-        output_prop = model._policy_net(model._cnn_net(input_data))
-        # action = 2 if np.random.uniform() < output_prop.data else 3  
+        print input_data
+        output_prop = model.get_policy(input_data)
         action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data[0])
-        fake_label = np.zeros(3)
-        fake_label[max([action - 1, 0])] = 1
+        action_label = np.zeros(3)
+        action_label[max([action - 1, 0])] = 1
         input_history.append(input_data)
-        fake_label_history.append(fake_label)
+        action_label_history.append(action_label)
 
         if reward != 0:
             num_of_games += 1
@@ -156,40 +167,45 @@ def main():
         reward_history.append(reward)
         reward_sum += reward
         if done or time_step_index > t_max:
-            fake_label_sum += sum(fake_label_history)
-            fake_label_len += len(fake_label_history)
-            # print fake_label_sum, fake_label_len
+            action_label_sum += sum(action_label_history)
+            action_label_len += len(action_label_history)
+            # print action_label_sum, action_label_len
             running_reward = running_reward * 0.99 + reward_sum * 0.01
             print "epoch #%d, reward_sum = %f, running_reward = %f, average_prop = %s" % \
-                    (index_epoch, reward_sum, running_reward, str(fake_label_sum / fake_label_len))
+                    (index_epoch, reward_sum, running_reward, str(action_label_sum / action_label_len))
 
             if index_epoch % 100 == 0 and index_epoch != 0:
                 pickle.dump(model, open('excited_%d.pkl' % index_epoch, 'wb'))
             
-            if index_epoch % args.batch_size == 0 and index_epoch != 0:  
-                print "average num of frames = %f" % (len(fake_label_history) / float(num_of_games))
-                print "updating..."
-                input_history = np.vstack(input_history).astype(np.float32)
-                initial_v_value = model._value_net(model._cnn_net(input_history[-1:]))
-                discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
-                fake_label_history = np.vstack(fake_label_history).astype(np.float32)
+            # if index_epoch % args.batch_size == 0 and index_epoch != 0:  
+            #     print "average num of frames = %f" % (len(action_label_history) / float(num_of_games))
+            #     print "updating..."
+            input_history = np.vstack(input_history).astype(np.float32)
+            policy_history = model.get_policy(input_history)
+            value_history = model.get_value(input_history)
+            action_label_history = np.vstack(action_label_history).astype(np.float32).astype(bool)
+            policy_history = policy_history[action_label_history]
+            value_history = value_history[action_label_history]  
+            print policy_history, value_history, policy_history.data.shape, value_history.data.shape
+            initial_v_value = 0 if done else value_history[-1].data 
+            discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
 
-                output_prop = model(input_history)
-                diff =  np.multiply((output_prop.data - fake_label_history), \
-                        discounted_reward_history.reshape(len(fake_label_history), 1))
-                output_prop.grad = - diff if args.reverse_grad else diff
-                output_prop.backward()         # grad is accumulated
+            diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history)
+            diff_v = (Variable(discounted_reward_history) - value_history) ** 2
+            diff = F.sum(diff_p + diff_v * 0.5)
+            diff.backward()         # grad is accumulated
 
-                optimizer.update()
-                model.cleargrads()
-                num_of_games = 0
-                input_history, fake_label_history, reward_history = [], [], []
+            model.update()
+            model.cleargrads()
+            num_of_games = 0
+            input_history, action_label_history, reward_history = [], [], []
                 
-            fake_label_sum = np.zeros(3)
-            fake_label_len = 0
+            action_label_sum = np.zeros(3)
+            action_label_len = 0
             reward_sum = 0
-            observation = env.reset()
-            index_epoch += 1
+            if done:
+                observation = env.reset()
+                index_epoch += 1
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
