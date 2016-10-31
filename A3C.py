@@ -45,10 +45,10 @@ class A3C(object):
         return
 
     def get_policy(self, input_data):
-        return self._policy_net(self._cnn_net(Variable(input_data)))
+        return self._policy_net(self._cnn_net(input_data))
 
     def get_value(self, input_data):
-        return self._value_net(self._cnn_net(Variable(input_data)))
+        return self._value_net(self._cnn_net(input_data))
 
     def update(self):
         self._optimizer_p.update()
@@ -103,7 +103,7 @@ class Value_net(Chain):
     
     def __call__(self, input_data):
         output = F.sigmoid(self.fully_conn_1(input_data))
-        output = F.linear(self.fully_conn_2(output))
+        output = self.fully_conn_2(output)
         return output
 
 
@@ -151,12 +151,10 @@ def main():
         if gpu_on:
             input_data = cuda.to_gpu(input_data)
 
-        print input_data
+        input_history.append(input_data)
         output_prop = model.get_policy(input_data)
         action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data[0])
-        action_label = np.zeros(3)
-        action_label[max([action - 1, 0])] = 1
-        input_history.append(input_data)
+        action_label = int(max([action - 1, 0]))
         action_label_history.append(action_label)
 
         if reward != 0:
@@ -166,13 +164,10 @@ def main():
         time_step_index += 1
         reward_history.append(reward)
         reward_sum += reward
-        if done or time_step_index > t_max:
+        if done or time_step_index >= t_max:
             action_label_sum += sum(action_label_history)
             action_label_len += len(action_label_history)
             # print action_label_sum, action_label_len
-            running_reward = running_reward * 0.99 + reward_sum * 0.01
-            print "epoch #%d, reward_sum = %f, running_reward = %f, average_prop = %s" % \
-                    (index_epoch, reward_sum, running_reward, str(action_label_sum / action_label_len))
 
             if index_epoch % 100 == 0 and index_epoch != 0:
                 pickle.dump(model, open('excited_%d.pkl' % index_epoch, 'wb'))
@@ -182,17 +177,22 @@ def main():
             #     print "updating..."
             input_history = np.vstack(input_history).astype(np.float32)
             policy_history = model.get_policy(input_history)
+
             value_history = model.get_value(input_history)
-            action_label_history = np.vstack(action_label_history).astype(np.float32).astype(bool)
-            policy_history = policy_history[action_label_history]
-            value_history = value_history[action_label_history]  
+            # print "policy: %s" % str(policy_history.data[:5])
+            # print "value: %s" % str(value_history.data[:5])
+            action_label_history = np.array(action_label_history)
+            # print "action_label_history: %s" % str(action_label_history)
+            policy_history = policy_history[np.arange(time_step_index), action_label_history]   # FIXME: problem in indexing here
+            value_history = value_history[np.arange(time_step_index), action_label_history]  
             print policy_history, value_history, policy_history.data.shape, value_history.data.shape
             initial_v_value = 0 if done else value_history[-1].data 
             discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
 
             diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history)
             diff_v = (Variable(discounted_reward_history) - value_history) ** 2
-            diff = F.sum(diff_p + diff_v * 0.5)
+            print diff_p.data.shape, diff_v.data.shape
+            diff = F.sum(diff_p + diff_v * 0.5)   # FIXME: good to simply do sum?
             diff.backward()         # grad is accumulated
 
             model.update()
@@ -202,8 +202,13 @@ def main():
                 
             action_label_sum = np.zeros(3)
             action_label_len = 0
-            reward_sum = 0
+            time_step_index = 0
+            
             if done:
+                running_reward = running_reward * 0.99 + reward_sum * 0.01
+                print "epoch #%d, reward_sum = %f, running_reward = %f, average_prop = %s" % \
+                        (index_epoch, reward_sum, running_reward, str(action_label_sum / action_label_len))
+                reward_sum = 0
                 observation = env.reset()
                 index_epoch += 1
 
