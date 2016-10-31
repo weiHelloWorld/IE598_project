@@ -44,11 +44,14 @@ class A3C(object):
         self._value_net.cleargrads()
         return
 
-    def get_policy(self, input_data):
-        return self._policy_net(self._cnn_net(input_data))
+    def get_state(self, input_data):
+        return self._cnn_net(input_data)
 
-    def get_value(self, input_data):
-        return self._value_net(self._cnn_net(input_data))
+    def get_policy(self, state_data):
+        return self._policy_net(state_data)
+
+    def get_value(self, state_data):
+        return self._value_net(state_data)
 
     def update(self):
         self._optimizer_p.update()
@@ -166,7 +169,7 @@ def main():
         reward_sum += reward
         if done or time_step_index >= t_max:
             for action_label_1 in [0,1,2]:
-                action_label_sum[action_label_1] += len(np.array(action_label_history) == action_label_1)
+                action_label_sum[action_label_1] += np.sum(np.array(action_label_history) == action_label_1)
             action_label_len += len(action_label_history)
             # print action_label_sum, action_label_len
 
@@ -177,19 +180,20 @@ def main():
             #     print "average num of frames = %f" % (len(action_label_history) / float(num_of_games))
             #     print "updating..."
             input_history = np.vstack(input_history).astype(np.float32)
-            policy_history = model.get_policy(input_history)
-            value_history = model.get_value(input_history)
+            state_history = model.get_state(input_history)
+            policy_history = model.get_policy(state_history)
+            value_history = model.get_value(state_history)
             # print "policy: %s" % str(policy_history.data[:5])
             # print "value: %s" % str(value_history.data[:5])
             action_label_history = np.array(action_label_history)
             # print "action_label_history: %s" % str(action_label_history)
-            policy_history = policy_history[np.arange(time_step_index), action_label_history]   # FIXME: problem in indexing here
+            policy_history = policy_history[np.arange(time_step_index), action_label_history]
             value_history = value_history[np.arange(time_step_index), action_label_history]  
             # print policy_history, value_history, policy_history.data.shape, value_history.data.shape
             initial_v_value = 0 if done else value_history[-1].data 
             discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
 
-            diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history)
+            diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history) # FIXME: positive or negative?
             diff_v = (Variable(discounted_reward_history) - value_history) ** 2
             # print diff_p.data.shape, diff_v.data.shape
             diff = F.sum(diff_p + diff_v * 0.5)   # FIXME: good to simply do sum?
@@ -203,7 +207,6 @@ def main():
             time_step_index = 0
             
             if done:
-                print action_label_sum
                 running_reward = running_reward * 0.99 + reward_sum * 0.01
                 print "epoch #%d, reward_sum = %f, running_reward = %f, average_prop = %s" % \
                         (index_epoch, reward_sum, running_reward, str(action_label_sum / float(action_label_len)))
@@ -216,7 +219,7 @@ def main():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--starting_running_reward", type=float, default=-21.0)
-    parser.add_argument("--lr", type=float, default=0.00001)
+    parser.add_argument("--lr", type=float, default=0.00005)
     parser.add_argument("--resume_file", type=str, default=None)
     parser.add_argument("--render", type=int, default=0)
     parser.add_argument("--reverse_grad", type=int, default=0)
