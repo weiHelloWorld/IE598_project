@@ -121,7 +121,7 @@ class Value_net(Chain):
     def __init__(self, input_dim):
         super(Value_net, self).__init__(
             fully_conn_1 = L.Linear(input_dim,200),
-            fully_conn_2 = L.Linear(200,3)
+            fully_conn_2 = L.Linear(200,1)
         )
     
     def __call__(self, input_data):
@@ -199,15 +199,14 @@ def main():
             input_history = np.vstack(input_history).astype(np.float32)
             state_history = model.get_state(input_history)
             policy_history = model.get_policy(state_history)
-            value_history = model.get_value(state_history)
+            value_history = F.flatten(model.get_value(state_history))
             # print "policy: %s" % str(policy_history.data[:5])
             # print "value: %s" % str(value_history.data[:5])
             action_label_history = np.array(action_label_history)
             # print "action_label_history: %s" % str(action_label_history)
             average_policy = np.mean(policy_history.data, axis=0)
-            average_value = np.mean(value_history.data, axis=0)
+            average_value = np.mean(value_history.data)
             policy_history = policy_history[np.arange(time_step_index), action_label_history]
-            value_history = value_history[np.arange(time_step_index), action_label_history]  
             # print value_history.data, policy_history.data
             # print policy_history, value_history, policy_history.data.shape, value_history.data.shape
             initial_v_value = 0 if done else value_history[-1].data 
