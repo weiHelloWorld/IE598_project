@@ -186,11 +186,6 @@ def main():
 
             if index_epoch % 100 == 0 and index_epoch != 0:
                 pickle.dump(model, open('excited_%d.pkl' % index_epoch, 'wb'))
-
-            if index_epoch % args.batch_size == 0 and index_epoch != 0:
-                print "updating"
-                model.update()
-                model.cleargrads()
     
             input_history = np.vstack(input_history).astype(np.float32)
             state_history = model.get_state(input_history)
@@ -200,6 +195,8 @@ def main():
             # print "value: %s" % str(value_history.data[:5])
             action_label_history = np.array(action_label_history)
             # print "action_label_history: %s" % str(action_label_history)
+            average_policy = np.mean(policy_history.data, axis=0)
+            average_value = np.mean(value_history.data, axis=0)
             policy_history = policy_history[np.arange(time_step_index), action_label_history]
             value_history = value_history[np.arange(time_step_index), action_label_history]  
             # print value_history.data, policy_history.data
@@ -219,10 +216,14 @@ def main():
             time_step_index = 0
             
             if done:
+                if index_epoch % args.batch_size == 0 and index_epoch != 0:
+                    print "updating..."
+                    model.update()
+                    model.cleargrads()
+
                 running_reward = running_reward * 0.99 + reward_sum * 0.01
-                print "epoch #%d, reward_sum = %f, running_reward = %f, average_prop = %s" % \
-                        (index_epoch, reward_sum, running_reward, str(action_label_sum / float(action_label_len)))
-                print "number of frames = %d" % (action_label_len)
+                print "epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
+                        (index_epoch, reward_sum, running_reward, str(average_policy), str(average_value), action_label_len)
                 reward_sum = 0
                 observation = env.reset()
                 index_epoch += 1
@@ -232,7 +233,7 @@ def main():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--starting_running_reward", type=float, default=-21.0)
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--lr", type=float, default=0.0005)
     parser.add_argument("--resume_file", type=str, default=None)
     parser.add_argument("--render", type=int, default=0)
     parser.add_argument("--reverse_grad", type=int, default=0)
