@@ -22,20 +22,23 @@ def discount_rewards(r, initial_v_value):
 
 class A3C(object):
     def __init__(self, cnn_net=None, policy_net=None, value_net=None, 
-                 optimizer_p=None, optimizer_v=None):
+                 optimizer_p=None, optimizer_v=None, optimizer_c= None):
         if cnn_net is None: cnn_net = CNN()
         if policy_net is None: policy_net = Policy_net()
         if value_net is None: value_net = Value_net()
-        if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr, alpha=0.99, eps=1e-08)
-        if optimizer_v is None: optimizer_v = optimizers.RMSprop(lr=args.lr, alpha=0.99, eps=1e-08)
+        if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=1e-08)
+        if optimizer_v is None: optimizer_v = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=1e-08)
+        if optimizer_c is None: optimizer_c = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=1e-08)
 
         self._cnn_net = cnn_net
         self._policy_net = policy_net
         self._value_net = value_net
         self._optimizer_p = optimizer_p
         self._optimizer_v = optimizer_v     # FIXME: do we need two optimizers?
+        self._optimizer_c = optimizer_c
         self._optimizer_p.setup(self._policy_net)
         self._optimizer_v.setup(self._value_net)
+        self._optimizer_c.setup(self._cnn_net)
         return
 
     def cleargrads(self):
@@ -54,16 +57,25 @@ class A3C(object):
         return self._value_net(state_data)
 
     def update(self):
+        # print "0"
+        # print self._cnn_net.conv_1.W.data[0][0][0][0], self._policy_net.fully_conn_1.W.data[0][0], self._value_net.fully_conn_1.W.data[0][0]
+        self._optimizer_c.update()
+        # print "1"
+        # print self._cnn_net.conv_1.W.data[0][0][0][0], self._policy_net.fully_conn_1.W.data[0][0], self._value_net.fully_conn_1.W.data[0][0]
         self._optimizer_p.update()
+        # print "2"
+        # print self._cnn_net.conv_1.W.data[0][0][0][0], self._policy_net.fully_conn_1.W.data[0][0], self._value_net.fully_conn_1.W.data[0][0]
         self._optimizer_v.update()
+        # print "3"
+        # print self._cnn_net.conv_1.W.data[0][0][0][0], self._policy_net.fully_conn_1.W.data[0][0], self._value_net.fully_conn_1.W.data[0][0]
         return
 
 
 class CNN(Chain):
     def __init__(self):
         super(CNN, self).__init__(
-            conv_1=L.Convolution2D(4, 4, 8, stride=2, pad=1),
-            conv_2=L.Convolution2D(4, 4, 8, stride=1, pad=1)
+            conv_1=L.Convolution2D(4, 16, 8, stride=4),
+            conv_2=L.Convolution2D(16, 32, 4, stride=2)
         )
 
     def __call__(self, x_data):
@@ -87,7 +99,7 @@ def process_observation(observation):
 class Policy_net(Chain):
     def __init__(self):
         super(Policy_net, self).__init__(
-            fully_conn_1 = L.Linear(4356,200),
+            fully_conn_1 = L.Linear(2048,200),
             fully_conn_2 = L.Linear(200,3)
         )
     
@@ -100,7 +112,7 @@ class Policy_net(Chain):
 class Value_net(Chain):
     def __init__(self):
         super(Value_net, self).__init__(
-            fully_conn_1 = L.Linear(4356,200),
+            fully_conn_1 = L.Linear(2048,200),
             fully_conn_2 = L.Linear(200,3)
         )
     
@@ -155,7 +167,7 @@ def main():
             input_data = cuda.to_gpu(input_data)
 
         input_history.append(input_data)
-        output_prop = model.get_policy(input_data)
+        output_prop = model.get_policy(model.get_state(input_data))
         action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data[0])
         action_label = int(max([action - 1, 0]))
         action_label_history.append(action_label)
@@ -171,14 +183,15 @@ def main():
             for action_label_1 in [0,1,2]:
                 action_label_sum[action_label_1] += np.sum(np.array(action_label_history) == action_label_1)
             action_label_len += len(action_label_history)
-            # print action_label_sum, action_label_len
 
             if index_epoch % 100 == 0 and index_epoch != 0:
                 pickle.dump(model, open('excited_%d.pkl' % index_epoch, 'wb'))
-            
-            # if index_epoch % args.batch_size == 0 and index_epoch != 0:  
-            #     print "average num of frames = %f" % (len(action_label_history) / float(num_of_games))
-            #     print "updating..."
+
+            if index_epoch % args.batch_size == 0 and index_epoch != 0:
+                print "updating"
+                model.update()
+                model.cleargrads()
+    
             input_history = np.vstack(input_history).astype(np.float32)
             state_history = model.get_state(input_history)
             policy_history = model.get_policy(state_history)
@@ -189,6 +202,7 @@ def main():
             # print "action_label_history: %s" % str(action_label_history)
             policy_history = policy_history[np.arange(time_step_index), action_label_history]
             value_history = value_history[np.arange(time_step_index), action_label_history]  
+            # print value_history.data, policy_history.data
             # print policy_history, value_history, policy_history.data.shape, value_history.data.shape
             initial_v_value = 0 if done else value_history[-1].data 
             discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
@@ -198,9 +212,7 @@ def main():
             # print diff_p.data.shape, diff_v.data.shape
             diff = F.sum(diff_p + diff_v * 0.5)   # FIXME: good to simply do sum?
             diff.backward()         # grad is accumulated
-
-            model.update()
-            model.cleargrads()
+            
             num_of_games = 0
             input_history, action_label_history, reward_history = [], [], []
 
@@ -210,6 +222,7 @@ def main():
                 running_reward = running_reward * 0.99 + reward_sum * 0.01
                 print "epoch #%d, reward_sum = %f, running_reward = %f, average_prop = %s" % \
                         (index_epoch, reward_sum, running_reward, str(action_label_sum / float(action_label_len)))
+                print "number of frames = %d" % (action_label_len)
                 reward_sum = 0
                 observation = env.reset()
                 index_epoch += 1
@@ -219,7 +232,7 @@ def main():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--starting_running_reward", type=float, default=-21.0)
-    parser.add_argument("--lr", type=float, default=0.00005)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--resume_file", type=str, default=None)
     parser.add_argument("--render", type=int, default=0)
     parser.add_argument("--reverse_grad", type=int, default=0)
