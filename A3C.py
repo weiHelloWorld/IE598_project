@@ -9,6 +9,20 @@ import chainer.links as L
 import copy
 import time
 
+def process_observation(observation):
+    # return observation[::2,::2,0] / 256.0
+    observation = observation[35:195]
+    observation[observation == 144] = 0  # erase background (background type 1)
+    observation[observation == 109] = 0  # erase background (background type 2)
+    observation[observation != 0] = 1  # everything else (paddles, ball) just set to 1
+    observation = np.array([[observation[::2,::2,0]]]).astype(np.float32)
+    return observation
+
+def process_observation_2(observation):
+    observation = observation[35:195][::2,::2,0] / 255.0
+    observation = np.array(observation).astype(np.float32)
+    return observation
+
 
 def discount_rewards(r, initial_v_value):
     """ take 1D float array of rewards and compute discounted reward """
@@ -24,7 +38,7 @@ class A3C(object):
     def __init__(self, cnn_net=None, policy_net=None, value_net=None, 
                  optimizer_p=None, optimizer_v=None, optimizer_c= None):
         if cnn_net is None: cnn_net = CNN()
-        in_channel = 1600
+        in_channel = 200
         if policy_net is None: policy_net = Policy_net(in_channel)
         if value_net is None: value_net = Value_net(in_channel)
         if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=0.1)
@@ -77,7 +91,8 @@ class CNN(Chain):
         super(CNN, self).__init__(
             conv_1=L.Convolution2D(input_channel, 32, 8, stride=4),
             conv_2=L.Convolution2D(32, 32, 4, stride=2),
-            conv_3=L.Convolution2D(32, 64, 4, stride=1)
+            conv_3=L.Convolution2D(32, 64, 4, stride=1),
+            fully_conn_1 = L.Linear(1600,200)
         )
 
     def __call__(self, x_data):
@@ -85,48 +100,30 @@ class CNN(Chain):
         output = F.relu(self.conv_1(output))
         output = F.relu(self.conv_2(output))
         output = F.relu(self.conv_3(output))
+        output = F.relu(self.fully_conn_1(output))
         # note that no pooling layers are included, since translation is important for most games
         return output
-
-
-def process_observation(observation):
-    # return observation[::2,::2,0] / 256.0
-    observation = observation[35:195]
-    observation[observation == 144] = 0  # erase background (background type 1)
-    observation[observation == 109] = 0  # erase background (background type 2)
-    observation[observation != 0] = 1  # everything else (paddles, ball) just set to 1
-    observation = np.array([[observation[::2,::2,0]]]).astype(np.float32)
-    return observation
-
-def process_observation_2(observation):
-    observation = observation[35:195][::2,::2,0] / 255.0
-    observation = np.array(observation).astype(np.float32)
-    return observation
 
         
 class Policy_net(Chain):
     def __init__(self, input_dim):
         super(Policy_net, self).__init__(
-            fully_conn_1 = L.Linear(input_dim,200),
-            fully_conn_2 = L.Linear(200,3)
+            fully_conn_2 = L.Linear(input_dim,3)
         )
     
     def __call__(self, input_data):
-        output = F.sigmoid(self.fully_conn_1(input_data))
-        output = F.softmax(self.fully_conn_2(output))
+        output = F.softmax(self.fully_conn_2(input_data))
         return output
         
 
 class Value_net(Chain):
     def __init__(self, input_dim):
         super(Value_net, self).__init__(
-            fully_conn_1 = L.Linear(input_dim,200),
-            fully_conn_2 = L.Linear(200,1)
+            fully_conn_2 = L.Linear(input_dim,1)
         )
     
     def __call__(self, input_data):
-        output = F.sigmoid(self.fully_conn_1(input_data))
-        output = self.fully_conn_2(output)
+        output = self.fully_conn_2(input_data)
         return output
 
 
