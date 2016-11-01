@@ -24,11 +24,12 @@ class A3C(object):
     def __init__(self, cnn_net=None, policy_net=None, value_net=None, 
                  optimizer_p=None, optimizer_v=None, optimizer_c= None):
         if cnn_net is None: cnn_net = CNN()
-        if policy_net is None: policy_net = Policy_net()
-        if value_net is None: value_net = Value_net()
-        if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=1e-08)
-        if optimizer_v is None: optimizer_v = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=1e-08)
-        if optimizer_c is None: optimizer_c = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=1e-08)
+        in_channel = 1600
+        if policy_net is None: policy_net = Policy_net(in_channel)
+        if value_net is None: value_net = Value_net(in_channel)
+        if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=0.1)
+        if optimizer_v is None: optimizer_v = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=0.1)
+        if optimizer_c is None: optimizer_c = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=0.1)
 
         self._cnn_net = cnn_net
         self._policy_net = policy_net
@@ -72,16 +73,18 @@ class A3C(object):
 
 
 class CNN(Chain):
-    def __init__(self):
+    def __init__(self, input_channel = 12):
         super(CNN, self).__init__(
-            conv_1=L.Convolution2D(4, 16, 8, stride=4),
-            conv_2=L.Convolution2D(16, 32, 4, stride=2)
+            conv_1=L.Convolution2D(input_channel, 32, 8, stride=4),
+            conv_2=L.Convolution2D(32, 32, 4, stride=2),
+            conv_3=L.Convolution2D(32, 64, 4, stride=1)
         )
 
     def __call__(self, x_data):
         output = Variable(x_data)
         output = F.relu(self.conv_1(output))
         output = F.relu(self.conv_2(output))
+        output = F.relu(self.conv_3(output))
         # note that no pooling layers are included, since translation is important for most games
         return output
 
@@ -95,11 +98,16 @@ def process_observation(observation):
     observation = np.array([[observation[::2,::2,0]]]).astype(np.float32)
     return observation
 
+def process_observation_2(observation):
+    observation = observation[35:195][::2,::2,0] / 255.0
+    observation = np.array(observation).astype(np.float32)
+    return observation
+
         
 class Policy_net(Chain):
-    def __init__(self):
+    def __init__(self, input_dim):
         super(Policy_net, self).__init__(
-            fully_conn_1 = L.Linear(2048,200),
+            fully_conn_1 = L.Linear(input_dim,200),
             fully_conn_2 = L.Linear(200,3)
         )
     
@@ -110,9 +118,9 @@ class Policy_net(Chain):
         
 
 class Value_net(Chain):
-    def __init__(self):
+    def __init__(self, input_dim):
         super(Value_net, self).__init__(
-            fully_conn_1 = L.Linear(2048,200),
+            fully_conn_1 = L.Linear(input_dim,200),
             fully_conn_2 = L.Linear(200,3)
         )
     
@@ -148,19 +156,22 @@ def main():
     action_label_sum = np.zeros(3)
     action_label_len = 0
     num_of_games = 0
-    input_data = np.zeros((1, 4, 80, 80)).astype(np.float32)
+    input_data = np.zeros((1, 4 * 3, 80, 80)).astype(np.float32)
     # input_data = np.array(range(256)).reshape(1,4,8,8)
     image_index = 0
     time_step_index = 0
     t_max = 5
+    sum_diff_p = 0
+    sum_diff_v = 0
 
     while True:
         if render:
             env.render()
-        observation_processed = process_observation(observation)
-        input_data = np.roll(input_data, -1, axis=1)
-        input_data[0][-1][:] = observation_processed[0]
-        # print np.sum(input_data[0][3]), np.sum(input_data[0][1])
+        observation_processed = process_observation_2(observation)
+        input_data = np.roll(input_data, -3, axis=1)
+        input_data[0][-3:][:] = observation_processed
+        # print input_data.shape
+        # print np.sum(input_data[0][11]), np.sum(input_data[0][0])
         # time.sleep(0.5)
         
         if gpu_on:
@@ -180,8 +191,6 @@ def main():
         reward_history.append(reward)
         reward_sum += reward
         if done or time_step_index >= t_max:
-            for action_label_1 in [0,1,2]:
-                action_label_sum[action_label_1] += np.sum(np.array(action_label_history) == action_label_1)
             action_label_len += len(action_label_history)
 
             if index_epoch % 100 == 0 and index_epoch != 0:
@@ -205,8 +214,12 @@ def main():
             discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
 
             diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history) # FIXME: positive or negative?
+            if args.reverse_grad:
+                diff_p = - diff_p
             diff_v = (Variable(discounted_reward_history) - value_history) ** 2
             # print diff_p.data.shape, diff_v.data.shape
+            sum_diff_p += np.sum(diff_p.data)
+            sum_diff_v += np.sum(diff_v.data)
             diff = F.sum(diff_p + diff_v * 0.5)   # FIXME: good to simply do sum?
             diff.backward()         # grad is accumulated
             
@@ -224,6 +237,8 @@ def main():
                 running_reward = running_reward * 0.99 + reward_sum * 0.01
                 print "epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
                         (index_epoch, reward_sum, running_reward, str(average_policy), str(average_value), action_label_len)
+                print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
+                sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
                 observation = env.reset()
                 index_epoch += 1
