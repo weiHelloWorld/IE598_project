@@ -156,7 +156,7 @@ def main():
     input_data = np.zeros((1, 4 * 3, 80, 80)).astype(np.float32)
     image_index = 0
     time_step_index = 0
-    t_max = 5
+    t_max = args.t_max
     sum_diff_p = 0
     sum_diff_v = 0
 
@@ -196,6 +196,7 @@ def main():
             state_history = model.get_state(input_history)
             policy_history = model.get_policy(state_history)
             value_history = F.flatten(model.get_value(state_history))
+            entropy = - 0.01 * F.sum(policy_history * F.log(policy_history), axis=1)  # discouraging premature convergence
             # print "policy: %s" % str(policy_history.data[:5])
             # print "value: %s" % str(value_history.data[:5])
             action_label_history = np.array(action_label_history)
@@ -214,6 +215,8 @@ def main():
             discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
 
             diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history) # FIXME: positive or negative?
+            
+            diff_p += entropy
             if args.reverse_grad:
                 diff_p = - diff_p
             diff_v = (Variable(discounted_reward_history) - value_history) ** 2
@@ -225,6 +228,8 @@ def main():
             # print model._cnn_net.conv_1.W.grad[0][0][0:3]
             # print model._policy_net.fully_conn_2.W.grad[0][:10]
             # print model._value_net.fully_conn_2.W.grad[0][:10]
+            model.update()
+            model.cleargrads()
             
             num_of_games = 0
             input_history, action_label_history, reward_history = [], [], []
@@ -243,10 +248,10 @@ def main():
                 action_label_sum = np.zeros(3)
                 action_label_len = 0
 
-                if index_epoch % args.batch_size == 0 and index_epoch != 0:
-                    print "updating..."
-                    model.update()
-                    model.cleargrads()
+                # if index_epoch % args.batch_size == 0 and index_epoch != 0:
+                #     print "updating..."
+                #     model.update()
+                #     model.cleargrads()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -256,5 +261,6 @@ if __name__ == '__main__':
     parser.add_argument("--render", type=int, default=0)
     parser.add_argument("--reverse_grad", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=10)
+    parser.add_argument("--t_max", type=int, default=5)
     args = parser.parse_args()
     main()
