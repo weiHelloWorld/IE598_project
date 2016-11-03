@@ -91,15 +91,15 @@ class CNN(Chain):
         super(CNN, self).__init__(
             conv_1=L.Convolution2D(input_channel, 32, 8, stride=4),
             conv_2=L.Convolution2D(32, 32, 4, stride=2),
-            conv_3=L.Convolution2D(32, 64, 4, stride=1),
-            fully_conn_1 = L.Linear(1600,200)
+            # conv_3=L.Convolution2D(32, 64, 4, stride=1),
+            fully_conn_1 = L.Linear(2048,200)
         )
 
     def __call__(self, x_data):
         output = Variable(x_data)
         output = F.relu(self.conv_1(output))
         output = F.relu(self.conv_2(output))
-        output = F.relu(self.conv_3(output))
+        # output = F.relu(self.conv_3(output))
         output = F.relu(self.fully_conn_1(output))
         # note that no pooling layers are included, since translation is important for most games
         return output
@@ -154,7 +154,6 @@ def main():
     action_label_len = 0
     num_of_games = 0
     input_data = np.zeros((1, 4 * 3, 80, 80)).astype(np.float32)
-    # input_data = np.array(range(256)).reshape(1,4,8,8)
     image_index = 0
     time_step_index = 0
     t_max = 5
@@ -187,7 +186,7 @@ def main():
         time_step_index += 1
         reward_history.append(reward)
         reward_sum += reward
-        if done or time_step_index >= t_max:
+        if (done or reward == -1) or time_step_index >= t_max:
             action_label_len += len(action_label_history)
 
             if index_epoch % 100 == 0 and index_epoch != 0:
@@ -206,7 +205,12 @@ def main():
             policy_history = policy_history[np.arange(time_step_index), action_label_history]
             # print value_history.data, policy_history.data
             # print policy_history, value_history, policy_history.data.shape, value_history.data.shape
-            initial_v_value = 0 if done else value_history[-1].data 
+            if (done or reward == -1):
+                input_data = np.zeros((1, 4 * 3, 80, 80)).astype(np.float32)  # reset inputs
+                initial_v_value = 0 
+            else:
+                initial_v_value = value_history[-1].data 
+
             discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
 
             diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history) # FIXME: positive or negative?
@@ -217,7 +221,10 @@ def main():
             sum_diff_p += np.sum(diff_p.data)
             sum_diff_v += np.sum(diff_v.data)
             diff = F.sum(diff_p + diff_v * 0.5)   # FIXME: good to simply do sum?
-            diff.backward()         # grad is accumulated
+            diff.backward()         # FIXME: 1. is grad accumulated?  2. does grad backprop to the CNN?
+            # print model._cnn_net.conv_1.W.grad[0][0][0:3]
+            # print model._policy_net.fully_conn_2.W.grad[0][:10]
+            # print model._value_net.fully_conn_2.W.grad[0][:10]
             
             num_of_games = 0
             input_history, action_label_history, reward_history = [], [], []
@@ -225,11 +232,6 @@ def main():
             time_step_index = 0
             
             if done:
-                if index_epoch % args.batch_size == 0 and index_epoch != 0:
-                    print "updating..."
-                    model.update()
-                    model.cleargrads()
-
                 running_reward = running_reward * 0.99 + reward_sum * 0.01
                 print "epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
                         (index_epoch, reward_sum, running_reward, str(average_policy), str(average_value), action_label_len)
@@ -240,6 +242,11 @@ def main():
                 index_epoch += 1
                 action_label_sum = np.zeros(3)
                 action_label_len = 0
+
+                if index_epoch % args.batch_size == 0 and index_epoch != 0:
+                    print "updating..."
+                    model.update()
+                    model.cleargrads()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
