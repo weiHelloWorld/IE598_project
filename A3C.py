@@ -34,6 +34,24 @@ def discount_rewards(r, initial_v_value):
    
     return discounted_r
 
+def get_all_weights(chain):
+        return [item.data.flatten() for item in chain.params()]
+
+def set_all_weighs(chain, weight_list):
+    for index, item in enumerate(chain.params()):
+        assert (item.data.flatten().shape[0] == weight_list[index].shape[0])
+        item.data[:] = weight_list[index].reshape(item.data.shape)
+    return
+
+def get_all_grads(chain):
+    return [item.grad.flatten() for item in chain.params()]
+
+def set_all_grads(chain, grad_list):
+    for index, item in enumerate(chain.params()):
+        assert (item.grad.flatten().shape[0] == grad_list[index].shape[0])
+        item.grad[:] = grad_list[index].reshape(item.grad.shape)
+    return
+
 class A3C(object):
     def __init__(self, cnn_net=None, policy_net=None, value_net=None, 
                  optimizer_p=None, optimizer_v=None, optimizer_c= None):
@@ -85,6 +103,24 @@ class A3C(object):
         # print self._cnn_net.conv_1.W.data[0][0][0][0], self._policy_net.fully_conn_1.W.data[0][0], self._value_net.fully_conn_1.W.data[0][0]
         return
 
+    def get_all_weights(self):
+        return [get_all_weights(item) for item in [self._cnn_net, self._policy_net, self._value_net]]
+
+    def set_all_weighs(self, weight_list_list):
+        set_all_weighs(self._cnn_net, weight_list_list[0])
+        set_all_weighs(self._policy_net, weight_list_list[1])
+        set_all_weighs(self._value_net, weight_list_list[2])
+        return
+
+    def get_all_grads(self):
+        return [get_all_grads(item) for item in [self._cnn_net, self._policy_net, self._value_net]]
+
+    def set_all_grads(self, grad_list_list):
+        set_all_grads(self._cnn_net, grad_list_list[0])
+        set_all_grads(self._policy_net, grad_list_list[1])
+        set_all_grads(self._value_net, grad_list_list[2])
+        return
+
 
 class CNN(Chain):
     def __init__(self, input_channel = 12):
@@ -127,21 +163,28 @@ class Value_net(Chain):
         return output
 
 
-def main():
+def run_process(process_id = 0, shared_weight_list = None):
     env = gym.make("Pong-v0")
     gpu_on = 0
     observation = env.reset()
     running_reward = args.starting_running_reward
     print "starting_running_reward = %f" % running_reward
+    model = A3C()
     if args.resume_file is None:
-        model = A3C()
+        shared_model = A3C()
     else:
-        model = pickle.load(open(args.resume_file, 'rb'))
+        shared_model = pickle.load(open(args.resume_file, 'rb'))
+
+    if not shared_weight_list is None:
+        shared_model.set_all_weighs([np.array(item).shape for item in shared_weight_list])
+
+    model.set_all_weighs(shared_model.get_all_weights())  # sync model with shared_model
 
     # if gpu_on:
     #     model.to_gpu()
 
     model.cleargrads() 
+    shared_model.cleargrads()
     render = args.render
     index_epoch = 0
     discount_rate = 0.99
@@ -190,7 +233,7 @@ def main():
             action_label_len += len(action_label_history)
 
             if index_epoch % 100 == 0 and index_epoch != 0:
-                pickle.dump(model, open('excited_%d.pkl' % index_epoch, 'wb'))
+                pickle.dump(shared_model, open('excited_%d.pkl' % index_epoch, 'wb'))
     
             input_history = np.vstack(input_history).astype(np.float32)
             state_history = model.get_state(input_history)
@@ -228,8 +271,11 @@ def main():
             # print model._cnn_net.conv_1.W.grad[0][0][0:3]
             # print model._policy_net.fully_conn_2.W.grad[0][:10]
             # print model._value_net.fully_conn_2.W.grad[0][:10]
-            model.update()
+
+            shared_model.set_all_grads(model.get_all_grads())
+            shared_model.update()
             model.cleargrads()
+            model.set_all_weighs(shared_model.get_all_weights())
             
             num_of_games = 0
             input_history, action_label_history, reward_history = [], [], []
@@ -263,4 +309,4 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--t_max", type=int, default=5)
     args = parser.parse_args()
-    main()
+    run_process(0)
