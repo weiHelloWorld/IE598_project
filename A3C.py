@@ -7,7 +7,8 @@ from chainer import Link, Chain, ChainList
 import chainer.functions as F
 import chainer.links as L
 import copy
-import time
+import time, ctypes
+from multiprocessing import Process, Value, Array, RawArray
 
 def process_observation(observation):
     # return observation[::2,::2,0] / 256.0
@@ -37,7 +38,7 @@ def discount_rewards(r, initial_v_value):
 def get_all_weights(chain):
         return [item.data.flatten() for item in chain.params()]
 
-def set_all_weighs(chain, weight_list):
+def set_all_weights(chain, weight_list):
     for index, item in enumerate(chain.params()):
         assert (item.data.flatten().shape[0] == weight_list[index].shape[0])
         item.data[:] = weight_list[index].reshape(item.data.shape)
@@ -48,8 +49,8 @@ def get_all_grads(chain):
 
 def set_all_grads(chain, grad_list):
     for index, item in enumerate(chain.params()):
-        assert (item.grad.flatten().shape[0] == grad_list[index].shape[0])
-        item.grad[:] = grad_list[index].reshape(item.grad.shape)
+        assert (item.data.flatten().shape[0] == grad_list[index].shape[0])
+        item.grad = grad_list[index].reshape(item.data.shape)
     return
 
 class A3C(object):
@@ -103,19 +104,19 @@ class A3C(object):
         # print self._cnn_net.conv_1.W.data[0][0][0][0], self._policy_net.fully_conn_1.W.data[0][0], self._value_net.fully_conn_1.W.data[0][0]
         return
 
-    def get_all_weights(self):
+    def get_all_weight_list(self):
         return [get_all_weights(item) for item in [self._cnn_net, self._policy_net, self._value_net]]
 
-    def set_all_weighs(self, weight_list_list):
-        set_all_weighs(self._cnn_net, weight_list_list[0])
-        set_all_weighs(self._policy_net, weight_list_list[1])
-        set_all_weighs(self._value_net, weight_list_list[2])
+    def set_all_weight_list(self, weight_list_list):
+        set_all_weights(self._cnn_net, weight_list_list[0])
+        set_all_weights(self._policy_net, weight_list_list[1])
+        set_all_weights(self._value_net, weight_list_list[2])
         return
 
-    def get_all_grads(self):
+    def get_all_grad_list(self):
         return [get_all_grads(item) for item in [self._cnn_net, self._policy_net, self._value_net]]
 
-    def set_all_grads(self, grad_list_list):
+    def set_all_grad_list(self, grad_list_list):
         set_all_grads(self._cnn_net, grad_list_list[0])
         set_all_grads(self._policy_net, grad_list_list[1])
         set_all_grads(self._value_net, grad_list_list[2])
@@ -163,22 +164,19 @@ class Value_net(Chain):
         return output
 
 
-def run_process(process_id = 0, shared_weight_list = None):
+def run_process(process_id, shared_weight_list):
     env = gym.make("Pong-v0")
     gpu_on = 0
     observation = env.reset()
     running_reward = args.starting_running_reward
     print "starting_running_reward = %f" % running_reward
     model = A3C()
-    if args.resume_file is None:
-        shared_model = A3C()
-    else:
-        shared_model = pickle.load(open(args.resume_file, 'rb'))
+    shared_model = A3C()
 
     if not shared_weight_list is None:
-        shared_model.set_all_weighs([np.array(item).shape for item in shared_weight_list])
+        shared_model.set_all_weight_list([[np.frombuffer(item) for item in weights] for weights in shared_weight_list])
 
-    model.set_all_weighs(shared_model.get_all_weights())  # sync model with shared_model
+    model.set_all_weight_list(shared_model.get_all_weight_list())  # sync model with shared_model
 
     # if gpu_on:
     #     model.to_gpu()
@@ -272,10 +270,11 @@ def run_process(process_id = 0, shared_weight_list = None):
             # print model._policy_net.fully_conn_2.W.grad[0][:10]
             # print model._value_net.fully_conn_2.W.grad[0][:10]
 
-            shared_model.set_all_grads(model.get_all_grads())
+            shared_model.cleargrads()
+            shared_model.set_all_grad_list(model.get_all_grad_list())
             shared_model.update()
             model.cleargrads()
-            model.set_all_weighs(shared_model.get_all_weights())
+            model.set_all_weight_list(shared_model.get_all_weight_list())
             
             num_of_games = 0
             input_history, action_label_history, reward_history = [], [], []
@@ -284,6 +283,7 @@ def run_process(process_id = 0, shared_weight_list = None):
             
             if done:
                 running_reward = running_reward * 0.99 + reward_sum * 0.01
+                print "process_id = %d" % process_id
                 print "epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
                         (index_epoch, reward_sum, running_reward, str(average_policy), str(average_value), action_label_len)
                 print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
@@ -309,4 +309,24 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--t_max", type=int, default=5)
     args = parser.parse_args()
-    run_process(0)
+
+    if args.resume_file is None:
+        shared_model = A3C()
+    else:
+        shared_model = pickle.load(open(args.resume_file, 'rb'))
+
+    # print shared_model.get_all_weight_list()[0]
+    shared_weight_list = [[RawArray(ctypes.c_double, item) for item in weights] 
+                                        for weights in shared_model.get_all_weight_list()]
+
+    num_of_processes = 4
+    processes = [[]] * num_of_processes
+    for item in range(num_of_processes):
+        processes[item] = Process(target=run_process, args=(item, shared_weight_list))
+
+    for item in processes:
+        item.start()
+        
+    for item in processes:
+        item.join()
+
