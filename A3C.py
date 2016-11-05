@@ -41,7 +41,7 @@ def get_all_weights(chain):
 def set_all_weights(chain, weight_list):
     for index, item in enumerate(chain.params()):
         assert (item.data.flatten().shape[0] == weight_list[index].shape[0])
-        item.data[:] = weight_list[index].reshape(item.data.shape)
+        item.data = weight_list[index].reshape(item.data.shape)
     return
 
 def get_all_grads(chain):
@@ -172,7 +172,7 @@ def run_process(process_id, shared_weight_list, running_reward):
     model = A3C()
     shared_model = A3C()
 
-    shared_model.set_all_weight_list([[np.frombuffer(item) for item in weights] for weights in shared_weight_list])
+    shared_model.set_all_weight_list([[np.frombuffer(item, dtype=ctypes.c_float) for item in weights] for weights in shared_weight_list])
 
     model.set_all_weight_list(shared_model.get_all_weight_list())  # sync model with shared_model
 
@@ -317,13 +317,13 @@ if __name__ == '__main__':
 
     lock_1 = mp.Lock()
     lock_2 = mp.Lock()
-    running_reward = mp.Value(ctypes.c_double, args.starting_running_reward)
+    running_reward = mp.Value(ctypes.c_float, args.starting_running_reward)
     if args.resume_file is None:
         shared_model = A3C()
     else:
         shared_model = pickle.load(open(args.resume_file, 'rb'))
 
-    shared_weight_list = [[mp.RawArray(ctypes.c_double, item) for item in weights] 
+    shared_weight_list = [[mp.RawArray(ctypes.c_float, item) for item in weights] 
                                         for weights in shared_model.get_all_weight_list()]
 
     num_of_processes = 4
