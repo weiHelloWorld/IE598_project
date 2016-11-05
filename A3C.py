@@ -172,8 +172,7 @@ def run_process(process_id, shared_weight_list, running_reward):
     model = A3C()
     shared_model = A3C()
 
-    if not shared_weight_list is None:
-        shared_model.set_all_weight_list([[np.frombuffer(item) for item in weights] for weights in shared_weight_list])
+    shared_model.set_all_weight_list([[np.frombuffer(item) for item in weights] for weights in shared_weight_list])
 
     model.set_all_weight_list(shared_model.get_all_weight_list())  # sync model with shared_model
 
@@ -269,12 +268,15 @@ def run_process(process_id, shared_weight_list, running_reward):
             # print model._policy_net.fully_conn_2.W.grad[0][:10]
             # print model._value_net.fully_conn_2.W.grad[0][:10]
 
-            shared_model.cleargrads()
-            shared_model.set_all_grad_list(model.get_all_grad_list())
-            # print "process_id = %d" % process_id
-            # print shared_model._cnn_net.conv_1.W.data[0][0][0]
-            # time.sleep(4)
-            shared_model.update()
+            with lock_1:
+                shared_model.cleargrads()
+                shared_model.set_all_grad_list(model.get_all_grad_list())
+                print "process_id = %d" % process_id
+                print np.frombuffer(shared_weight_list[0][0])[0:10]
+                # print shared_model._cnn_net.conv_1.W.data[0][0][0]
+                # time.sleep(4)
+                shared_model.update()
+
             model.cleargrads()
             model.set_all_weight_list(shared_model.get_all_weight_list())
             
@@ -284,7 +286,8 @@ def run_process(process_id, shared_weight_list, running_reward):
             time_step_index = 0
             
             if done:
-                running_reward.value = running_reward.value * 0.99 + reward_sum * 0.01  # TODO: set this to be global
+                with lock_2:
+                    running_reward.value = running_reward.value * 0.99 + reward_sum * 0.01 
                 print "process_id = %d" % process_id
                 print "epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
                         (index_epoch, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
@@ -312,6 +315,8 @@ if __name__ == '__main__':
     parser.add_argument("--t_max", type=int, default=5)
     args = parser.parse_args()
 
+    lock_1 = mp.Lock()
+    lock_2 = mp.Lock()
     running_reward = mp.Value(ctypes.c_double, args.starting_running_reward)
     if args.resume_file is None:
         shared_model = A3C()
