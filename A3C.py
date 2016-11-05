@@ -8,7 +8,7 @@ import chainer.functions as F
 import chainer.links as L
 import copy
 import time, ctypes
-from multiprocessing import Process, Value, Array, RawArray
+import multiprocessing as mp
 
 def process_observation(observation):
     # return observation[::2,::2,0] / 256.0
@@ -164,12 +164,11 @@ class Value_net(Chain):
         return output
 
 
-def run_process(process_id, shared_weight_list):
+def run_process(process_id, shared_weight_list, running_reward):
     env = gym.make("Pong-v0")
     gpu_on = 0
     observation = env.reset()
-    running_reward = args.starting_running_reward
-    print "starting_running_reward = %f" % running_reward
+    print "starting_running_reward = %f" % running_reward.value
     model = A3C()
     shared_model = A3C()
 
@@ -272,6 +271,9 @@ def run_process(process_id, shared_weight_list):
 
             shared_model.cleargrads()
             shared_model.set_all_grad_list(model.get_all_grad_list())
+            # print "process_id = %d" % process_id
+            # print shared_model._cnn_net.conv_1.W.data[0][0][0]
+            # time.sleep(4)
             shared_model.update()
             model.cleargrads()
             model.set_all_weight_list(shared_model.get_all_weight_list())
@@ -282,10 +284,10 @@ def run_process(process_id, shared_weight_list):
             time_step_index = 0
             
             if done:
-                running_reward = running_reward * 0.99 + reward_sum * 0.01
+                running_reward.value = running_reward.value * 0.99 + reward_sum * 0.01  # TODO: set this to be global
                 print "process_id = %d" % process_id
                 print "epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
-                        (index_epoch, reward_sum, running_reward, str(average_policy), str(average_value), action_label_len)
+                        (index_epoch, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
                 print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
@@ -310,19 +312,19 @@ if __name__ == '__main__':
     parser.add_argument("--t_max", type=int, default=5)
     args = parser.parse_args()
 
+    running_reward = mp.Value(ctypes.c_double, args.starting_running_reward)
     if args.resume_file is None:
         shared_model = A3C()
     else:
         shared_model = pickle.load(open(args.resume_file, 'rb'))
 
-    # print shared_model.get_all_weight_list()[0]
-    shared_weight_list = [[RawArray(ctypes.c_double, item) for item in weights] 
+    shared_weight_list = [[mp.RawArray(ctypes.c_double, item) for item in weights] 
                                         for weights in shared_model.get_all_weight_list()]
 
     num_of_processes = 4
     processes = [[]] * num_of_processes
     for item in range(num_of_processes):
-        processes[item] = Process(target=run_process, args=(item, shared_weight_list))
+        processes[item] = mp.Process(target=run_process, args=(item, shared_weight_list, running_reward))
 
     for item in processes:
         item.start()
