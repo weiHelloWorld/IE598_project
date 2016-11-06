@@ -60,9 +60,9 @@ class A3C(object):
         in_channel = 200
         if policy_net is None: policy_net = Policy_net(in_channel)
         if value_net is None: value_net = Value_net(in_channel)
-        if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=0.1)
-        if optimizer_v is None: optimizer_v = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=0.1)
-        if optimizer_c is None: optimizer_c = optimizers.RMSprop(lr=args.lr / args.batch_size, alpha=0.99, eps=0.1)
+        if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr, alpha=0.99, eps=0.1)
+        if optimizer_v is None: optimizer_v = optimizers.RMSprop(lr=args.lr, alpha=0.99, eps=0.1)
+        if optimizer_c is None: optimizer_c = optimizers.RMSprop(lr=args.lr, alpha=0.99, eps=0.1)
 
         self._cnn_net = cnn_net
         self._policy_net = policy_net
@@ -169,12 +169,11 @@ def run_process(process_id, shared_weight_list, running_reward):
     gpu_on = 0
     observation = env.reset()
     print "starting_running_reward = %f" % running_reward.value
-    model = A3C()
     shared_model = A3C()
 
     shared_model.set_all_weight_list([[np.frombuffer(item, dtype=ctypes.c_float) for item in weights] for weights in shared_weight_list])
 
-    model.set_all_weight_list(shared_model.get_all_weight_list())  # sync model with shared_model
+    model = copy.deepcopy(shared_model)
 
     # if gpu_on:
     #     model.to_gpu()
@@ -187,12 +186,13 @@ def run_process(process_id, shared_weight_list, running_reward):
     
     reward_sum = 0
     reward = 0
-    input_history, action_label_history, reward_history = [], [], []
-    previous_observation_processed = None
+    input_history, action_label_history, reward_history, policy_history, \
+                            value_history, policy_action_history = [], [], [], [], [], []
     action_label_sum = np.zeros(3)
     action_label_len = 0
     num_of_games = 0
-    input_data = np.zeros((1, 4 * 3, 80, 80)).astype(np.float32)
+    num_of_frames_in_input = 4
+    input_data = np.zeros((1, num_of_frames_in_input * 3, 80, 80)).astype(np.float32)
     image_index = 0
     time_step_index = 0
     t_max = args.t_max
@@ -205,6 +205,7 @@ def run_process(process_id, shared_weight_list, running_reward):
         observation_processed = process_observation_2(observation)
         input_data = np.roll(input_data, -3, axis=1)
         input_data[0][-3:][:] = observation_processed
+        # TODO: assert rolling is correct
         # print input_data.shape
         # print np.sum(input_data[0][11]), np.sum(input_data[0][0])
         # time.sleep(0.5)
@@ -213,9 +214,14 @@ def run_process(process_id, shared_weight_list, running_reward):
             input_data = cuda.to_gpu(input_data)
 
         input_history.append(input_data)
-        output_prop = model.get_policy(model.get_state(input_data))
-        action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data[0])
+        output_state = model.get_state(input_data)
+        output_prop = model.get_policy(output_state)[0]
+        output_value = model.get_value(output_state)[0][0]
+        policy_history.append(output_prop)
+        value_history.append(output_value)
+        action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data)
         action_label = int(max([action - 1, 0]))
+        policy_action_history.append(output_prop[action_label])
         action_label_history.append(action_label)
 
         if reward != 0:
@@ -225,27 +231,27 @@ def run_process(process_id, shared_weight_list, running_reward):
         time_step_index += 1
         reward_history.append(reward)
         reward_sum += reward
-        if (done or reward == -1) or time_step_index >= t_max:
+        if (done) or time_step_index >= t_max:
             action_label_len += len(action_label_history)
 
-            if index_epoch % 100 == 0 and index_epoch != 0:
+            if index_epoch % 100 == 0 and index_epoch != 0 and process_id == 0:
                 pickle.dump(shared_model, open('excited_%d.pkl' % index_epoch, 'wb'))
     
-            input_history = np.vstack(input_history).astype(np.float32)
-            state_history = model.get_state(input_history)
-            policy_history = model.get_policy(state_history)
-            value_history = F.flatten(model.get_value(state_history))
-            entropy = - 0.01 * F.sum(policy_history * F.log(policy_history), axis=1)  # discouraging premature convergence
+            # input_history = np.vstack(input_history).astype(np.float32)
+            # state_history = model.get_state(input_history)
+            # policy_history = model.get_policy(state_history)
+            # value_history = F.flatten(model.get_value(state_history))
+            # entropy = - 0.001 * F.sum(policy_history * F.log(policy_history), axis=1)  # discouraging premature convergence
             # print "policy: %s" % str(policy_history.data[:5])
             # print "value: %s" % str(value_history.data[:5])
             action_label_history = np.array(action_label_history)
             # print "action_label_history: %s" % str(action_label_history)
-            average_policy = np.mean(policy_history.data, axis=0)
-            average_value = np.mean(value_history.data)
-            policy_history = policy_history[np.arange(time_step_index), action_label_history]
+            average_policy = np.mean([_2.data for _2 in policy_history], axis=0)
+            average_value = np.mean([_2.data for _2 in value_history])
+            # policy_history = policy_history[np.arange(time_step_index), action_label_history]
             # print value_history.data, policy_history.data
             # print policy_history, value_history, policy_history.data.shape, value_history.data.shape
-            if (done or reward == -1):
+            if (done):
                 input_data = np.zeros((1, 4 * 3, 80, 80)).astype(np.float32)  # reset inputs
                 initial_v_value = 0 
             else:
@@ -253,12 +259,18 @@ def run_process(process_id, shared_weight_list, running_reward):
 
             discounted_reward_history = np.array(discount_rewards(np.array(reward_history), initial_v_value)).astype(np.float32)
 
-            diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history) # FIXME: positive or negative?
+            diff_p = 0; diff_v = 0
+            for _1 in range(len(policy_action_history)):
+                # print discounted_reward_history[_1], value_history[_1].data, policy_action_history[_1].data
+                diff_p += (discounted_reward_history[_1] - value_history[_1].data) * F.log(policy_action_history[_1])
+                diff_v += (discounted_reward_history[_1] - value_history[_1]) ** 2
+
+            # diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history) # FIXME: positive or negative?
             
-            diff_p += entropy
+            # diff_p += entropy
             if args.reverse_grad:
                 diff_p = - diff_p
-            diff_v = (Variable(discounted_reward_history) - value_history) ** 2
+            # diff_v = (Variable(discounted_reward_history) - value_history) ** 2
             # print diff_p.data.shape, diff_v.data.shape
             sum_diff_p += np.sum(diff_p.data)
             sum_diff_v += np.sum(diff_v.data)
@@ -271,27 +283,30 @@ def run_process(process_id, shared_weight_list, running_reward):
             with lock_1:
                 shared_model.cleargrads()
                 shared_model.set_all_grad_list(model.get_all_grad_list())
-                print "process_id = %d" % process_id
-                print np.frombuffer(shared_weight_list[0][0])[0:10]
+                # print "process_id = %d" % process_id
+                # print np.frombuffer(shared_weight_list[0][0])[0:10]
                 # print shared_model._cnn_net.conv_1.W.data[0][0][0]
                 # time.sleep(4)
                 shared_model.update()
 
+            model = copy.deepcopy(shared_model)
             model.cleargrads()
-            model.set_all_weight_list(shared_model.get_all_weight_list())
+            # model.set_all_weight_list(shared_model.get_all_weight_list())
+
             
             num_of_games = 0
-            input_history, action_label_history, reward_history = [], [], []
+            input_history, action_label_history, reward_history, policy_history, \
+                            value_history, policy_action_history = [], [], [], [], [], []
 
             time_step_index = 0
             
             if done:
                 with lock_2:
                     running_reward.value = running_reward.value * 0.99 + reward_sum * 0.01 
-                print "process_id = %d" % process_id
-                print "epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
-                        (index_epoch, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
+                print "process_id = %d, epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
+                        (process_id, index_epoch, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
                 print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
+                time.sleep(0.5)
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
                 observation = env.reset()
@@ -311,8 +326,8 @@ if __name__ == '__main__':
     parser.add_argument("--resume_file", type=str, default=None)
     parser.add_argument("--render", type=int, default=0)
     parser.add_argument("--reverse_grad", type=int, default=0)
-    parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--t_max", type=int, default=5)
+    parser.add_argument("--process_num", type=int, default=5)
     args = parser.parse_args()
 
     lock_1 = mp.Lock()
@@ -326,9 +341,8 @@ if __name__ == '__main__':
     shared_weight_list = [[mp.RawArray(ctypes.c_float, item) for item in weights] 
                                         for weights in shared_model.get_all_weight_list()]
 
-    num_of_processes = 4
-    processes = [[]] * num_of_processes
-    for item in range(num_of_processes):
+    processes = [[]] * args.process_num
+    for item in range(args.process_num):
         processes[item] = mp.Process(target=run_process, args=(item, shared_weight_list, running_reward))
 
     for item in processes:
