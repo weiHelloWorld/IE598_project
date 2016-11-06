@@ -20,8 +20,9 @@ def process_observation(observation):
     return observation
 
 def process_observation_2(observation):
-    observation = observation[35:195][::2,::2,0] / 255.0
+    observation = observation[35:195][::2,::2] / 255.0
     observation = np.array(observation).astype(np.float32)
+    observation = np.rollaxis(observation, 2, 0)
     return observation
 
 
@@ -198,13 +199,16 @@ def run_process(process_id, shared_weight_list, running_reward):
     t_max = args.t_max
     sum_diff_p = 0
     sum_diff_v = 0
+    entropy = 0
 
     while True:
         if render:
             env.render()
         observation_processed = process_observation_2(observation)
+        # print observation_processed.shape, input_data.shape
         input_data = np.roll(input_data, -3, axis=1)
         input_data[0][-3:][:] = observation_processed
+        # print input_data[0]
         # TODO: assert rolling is correct
         # print input_data.shape
         # print np.sum(input_data[0][11]), np.sum(input_data[0][0])
@@ -213,7 +217,7 @@ def run_process(process_id, shared_weight_list, running_reward):
         if gpu_on:
             input_data = cuda.to_gpu(input_data)
 
-        input_history.append(input_data)
+        # input_history.append(input_data)
         output_state = model.get_state(input_data)
         output_prop = model.get_policy(output_state)[0]
         output_value = model.get_value(output_state)[0][0]
@@ -223,6 +227,7 @@ def run_process(process_id, shared_weight_list, running_reward):
         action_label = int(max([action - 1, 0]))
         policy_action_history.append(output_prop[action_label])
         action_label_history.append(action_label)
+        entropy += -0.01 * F.sum(output_prop * F.log(output_prop))
 
         if reward != 0:
             num_of_games += 1
@@ -241,7 +246,7 @@ def run_process(process_id, shared_weight_list, running_reward):
             # state_history = model.get_state(input_history)
             # policy_history = model.get_policy(state_history)
             # value_history = F.flatten(model.get_value(state_history))
-            # entropy = - 0.001 * F.sum(policy_history * F.log(policy_history), axis=1)  # discouraging premature convergence
+            # entropy = - 0.01 * F.sum(policy_history * F.log(policy_history), axis=1)  # discouraging premature convergence
             # print "policy: %s" % str(policy_history.data[:5])
             # print "value: %s" % str(value_history.data[:5])
             action_label_history = np.array(action_label_history)
@@ -267,7 +272,7 @@ def run_process(process_id, shared_weight_list, running_reward):
 
             # diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history) # FIXME: positive or negative?
             
-            # diff_p += entropy
+            diff_p += entropy
             if args.reverse_grad:
                 diff_p = - diff_p
             # diff_v = (Variable(discounted_reward_history) - value_history) ** 2
@@ -297,6 +302,8 @@ def run_process(process_id, shared_weight_list, running_reward):
             num_of_games = 0
             input_history, action_label_history, reward_history, policy_history, \
                             value_history, policy_action_history = [], [], [], [], [], []
+
+            entropy = 0
 
             time_step_index = 0
             
