@@ -285,18 +285,18 @@ def run_process(process_id, shared_weight_list, running_reward):
             # print model._policy_net.fully_conn_2.W.grad[0][:10]
             # print model._value_net.fully_conn_2.W.grad[0][:10]
 
-            with lock_1:
-                shared_model.cleargrads()
-                shared_model.set_all_grad_list(model.get_all_grad_list())
-                # print "process_id = %d" % process_id
-                # print np.frombuffer(shared_weight_list[0][0])[0:10]
-                # print shared_model._cnn_net.conv_1.W.data[0][0][0]
-                # time.sleep(4)
-                shared_model.update()
+            if args.train:
+                with lock_1:
+                    shared_model.cleargrads()
+                    shared_model.set_all_grad_list(model.get_all_grad_list())
+                    # print "process_id = %d" % process_id
+                    # print np.frombuffer(shared_weight_list[0][0])[0:10]
+                    # print shared_model._cnn_net.conv_1.W.data[0][0][0]
+                    # time.sleep(4)
+                    shared_model.update()
 
-            model = copy.deepcopy(shared_model)
-            model.cleargrads()
-            # model.set_all_weight_list(shared_model.get_all_weight_list())
+                model = copy.deepcopy(shared_model)
+                model.cleargrads()
 
             
             num_of_games = 0
@@ -335,6 +335,7 @@ if __name__ == '__main__':
     parser.add_argument("--reverse_grad", type=int, default=0)
     parser.add_argument("--t_max", type=int, default=5)
     parser.add_argument("--process_num", type=int, default=5)
+    parser.add_argument("--train", type=int, default=1)
     args = parser.parse_args()
 
     lock_1 = mp.Lock()
