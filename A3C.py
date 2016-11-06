@@ -91,6 +91,9 @@ class A3C(object):
     def get_value(self, state_data):
         return self._value_net(state_data)
 
+    def get_all_optimizers(self):
+        return [self._optimizer_c, self._optimizer_p, self._optimizer_v]
+
     def update(self):
         # print "0"
         # print self._cnn_net.conv_1.W.data[0][0][0][0], self._policy_net.fully_conn_1.W.data[0][0], self._value_net.fully_conn_1.W.data[0][0]
@@ -121,6 +124,12 @@ class A3C(object):
         set_all_grads(self._cnn_net, grad_list_list[0])
         set_all_grads(self._policy_net, grad_list_list[1])
         set_all_grads(self._value_net, grad_list_list[2])
+        return
+
+    def set_optimizer_params(self, params):
+        for _1, opt in enumerate(self.get_all_optimizers()):
+            for item in opt._states.keys():
+                opt._states[item]['ms'] = np.frombuffer(params[_1][item], dtype=ctypes.c_float).reshape(opt._states[item]['ms'].shape)
         return
 
 
@@ -165,7 +174,7 @@ class Value_net(Chain):
         return output
 
 
-def run_process(process_id, shared_weight_list, running_reward):
+def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_reward):
     env = gym.make("Pong-v0")
     gpu_on = 0
     observation = env.reset()
@@ -173,7 +182,7 @@ def run_process(process_id, shared_weight_list, running_reward):
     shared_model = A3C()
 
     shared_model.set_all_weight_list([[np.frombuffer(item, dtype=ctypes.c_float) for item in weights] for weights in shared_weight_list])
-
+    shared_model.set_optimizer_params(shared_rmsprop_params)
     model = copy.deepcopy(shared_model)
 
     # if gpu_on:
@@ -294,6 +303,7 @@ def run_process(process_id, shared_weight_list, running_reward):
                     # print shared_model._cnn_net.conv_1.W.data[0][0][0]
                     # time.sleep(4)
                     shared_model.update()
+                # print np.frombuffer(shared_rmsprop_params[0]['/conv_1/b'], dtype=ctypes.c_float)
 
                 model = copy.deepcopy(shared_model)
                 model.cleargrads()
@@ -348,10 +358,15 @@ if __name__ == '__main__':
 
     shared_weight_list = [[mp.RawArray(ctypes.c_float, item) for item in weights] 
                                         for weights in shared_model.get_all_weight_list()]
+    shared_rmsprop_params = [[]] * 3
+    for _1, rms_optimizer in enumerate(shared_model.get_all_optimizers()):
+        shared_rmsprop_params[_1] = {}
+        for item in rms_optimizer._states.keys():
+            shared_rmsprop_params[_1][item] = mp.RawArray(ctypes.c_float, rms_optimizer._states[item]['ms'].flatten())
 
     processes = [[]] * args.process_num
     for item in range(args.process_num):
-        processes[item] = mp.Process(target=run_process, args=(item, shared_weight_list, running_reward))
+        processes[item] = mp.Process(target=run_process, args=(item, shared_weight_list, shared_rmsprop_params, running_reward))
 
     for item in processes:
         item.start()
