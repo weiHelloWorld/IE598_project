@@ -239,7 +239,7 @@ def run_process(process_id, shared_weight_list, running_reward):
         if (done) or time_step_index >= t_max:
             action_label_len += len(action_label_history)
 
-            if index_epoch % 100 == 0 and index_epoch != 0 and process_id == 0:
+            if index_epoch % 100 == 0 and index_epoch != 0 and process_id == 0 and done:
                 pickle.dump(shared_model, open('excited_%d.pkl' % index_epoch, 'wb'))
     
             # input_history = np.vstack(input_history).astype(np.float32)
