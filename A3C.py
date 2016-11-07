@@ -42,7 +42,7 @@ def get_all_weights(chain):
 def set_all_weights(chain, weight_list):
     for index, item in enumerate(chain.params()):
         assert (item.data.flatten().shape[0] == weight_list[index].shape[0])
-        item.data[:] = weight_list[index].reshape(item.data.shape)
+        item.data = weight_list[index].reshape(item.data.shape)
     return
 
 def get_all_grads(chain):
