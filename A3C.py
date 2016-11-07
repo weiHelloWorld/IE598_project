@@ -42,7 +42,7 @@ def get_all_weights(chain):
 def set_all_weights(chain, weight_list):
     for index, item in enumerate(chain.params()):
         assert (item.data.flatten().shape[0] == weight_list[index].shape[0])
-        item.data = weight_list[index].reshape(item.data.shape)
+        item.data[:] = weight_list[index].reshape(item.data.shape)
     return
 
 def get_all_grads(chain):
@@ -74,6 +74,12 @@ class A3C(object):
         self._optimizer_p.setup(self._policy_net)
         self._optimizer_v.setup(self._value_net)
         self._optimizer_c.setup(self._cnn_net)
+        return
+
+    def to_gpu(self):
+        self._cnn_net.to_gpu()
+        self._policy_net.to_gpu()
+        self._value_net.to_gpu()
         return
 
     def cleargrads(self):
@@ -176,17 +182,21 @@ class Value_net(Chain):
 
 def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_reward):
     env = gym.make("Pong-v0")
-    gpu_on = 0
+    gpu_on = 0   # FIXME: still problems for gpu
     observation = env.reset()
     print "starting_running_reward = %f" % running_reward.value
     shared_model = A3C()
 
     shared_model.set_all_weight_list([[np.frombuffer(item, dtype=ctypes.c_float) for item in weights] for weights in shared_weight_list])
-    shared_model.set_optimizer_params(shared_rmsprop_params)
+    if args.shared_opt:
+        shared_model.set_optimizer_params(shared_rmsprop_params)
+        print "shared_opt enabled"
+
     model = copy.deepcopy(shared_model)
 
-    # if gpu_on:
-    #     model.to_gpu()
+    if gpu_on:
+        model.to_gpu()
+        shared_model.to_gpu()
 
     model.cleargrads() 
     shared_model.cleargrads()
@@ -213,15 +223,14 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
     while True:
         if render:
             env.render()
+
         observation_processed = process_observation_2(observation)
         # print observation_processed.shape, input_data.shape
         input_data = np.roll(input_data, -3, axis=1)
         input_data[0][-3:][:] = observation_processed
         # print input_data[0]
         # TODO: assert rolling is correct
-        # print input_data.shape
         # print np.sum(input_data[0][11]), np.sum(input_data[0][0])
-        # time.sleep(0.5)
         
         if gpu_on:
             input_data = cuda.to_gpu(input_data)
@@ -240,7 +249,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
 
         if reward != 0:
             num_of_games += 1
-                
+
         observation, reward, done, info = env.step(action)
         time_step_index += 1
         reward_history.append(reward)
@@ -250,16 +259,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
 
             if index_epoch % 100 == 0 and index_epoch != 0 and process_id == 0 and done:
                 pickle.dump(shared_model, open('excited_%d.pkl' % index_epoch, 'wb'))
-    
-            # input_history = np.vstack(input_history).astype(np.float32)
-            # state_history = model.get_state(input_history)
-            # policy_history = model.get_policy(state_history)
-            # value_history = F.flatten(model.get_value(state_history))
-            # entropy = - 0.01 * F.sum(policy_history * F.log(policy_history), axis=1)  # discouraging premature convergence
-            # print "policy: %s" % str(policy_history.data[:5])
-            # print "value: %s" % str(value_history.data[:5])
-            action_label_history = np.array(action_label_history)
-            # print "action_label_history: %s" % str(action_label_history)
+
             average_policy = np.mean([_2.data for _2 in policy_history], axis=0)
             average_value = np.mean([_2.data for _2 in value_history])
             # policy_history = policy_history[np.arange(time_step_index), action_label_history]
@@ -299,22 +299,20 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
                     shared_model.cleargrads()
                     shared_model.set_all_grad_list(model.get_all_grad_list())
                     # print "process_id = %d" % process_id
-                    # print np.frombuffer(shared_weight_list[0][0])[0:10]
+                    # print np.frombuffer(shared_weight_list[0][0], dtype=ctypes.c_float)[0:10]
                     # print shared_model._cnn_net.conv_1.W.data[0][0][0]
                     # time.sleep(4)
                     shared_model.update()
                 # print np.frombuffer(shared_rmsprop_params[0]['/conv_1/b'], dtype=ctypes.c_float)
-
                 model = copy.deepcopy(shared_model)
+                # model.set_all_weight_list(shared_model.get_all_weight_list())
                 model.cleargrads()
-
             
             num_of_games = 0
             input_history, action_label_history, reward_history, policy_history, \
                             value_history, policy_action_history = [], [], [], [], [], []
 
             entropy = 0
-
             time_step_index = 0
             
             if done:
@@ -331,10 +329,6 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
                 action_label_sum = np.zeros(3)
                 action_label_len = 0
 
-                # if index_epoch % args.batch_size == 0 and index_epoch != 0:
-                #     print "updating..."
-                #     model.update()
-                #     model.cleargrads()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -346,6 +340,7 @@ if __name__ == '__main__':
     parser.add_argument("--t_max", type=int, default=5)
     parser.add_argument("--process_num", type=int, default=5)
     parser.add_argument("--train", type=int, default=1)
+    parser.add_argument("--shared_opt", type=int, default=1)
     args = parser.parse_args()
 
     lock_1 = mp.Lock()
@@ -358,6 +353,7 @@ if __name__ == '__main__':
 
     shared_weight_list = [[mp.RawArray(ctypes.c_float, item) for item in weights] 
                                         for weights in shared_model.get_all_weight_list()]
+
     shared_rmsprop_params = [[]] * 3
     for _1, rms_optimizer in enumerate(shared_model.get_all_optimizers()):
         shared_rmsprop_params[_1] = {}
