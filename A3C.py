@@ -196,9 +196,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
     reward = 0
     input_history, action_label_history, reward_history, policy_history, \
                             value_history, policy_action_history = [], [], [], [], [], []
-    action_label_sum = np.zeros(3)
     action_label_len = 0
-    num_of_games = 0
     num_of_frames_in_input = 4
     input_data = np.zeros((1, num_of_frames_in_input * 3, 80, 80)).astype(np.float32)
     image_index = 0
@@ -208,17 +206,16 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
     sum_diff_v = 0
     entropy = 0
     last_checkpoint_time = time.time()
+    accum_time = 0
 
     while True:
-        if render:
-            env.render()
+        
 
-        observation_processed = process_observation_2(observation)
-        # print observation_processed.shape, input_data.shape
-        input_data = np.roll(input_data, -3, axis=1)
-        input_data[0][-3:][:] = observation_processed
+        # observation_processed = process_observation_2(observation)
+        # # print observation_processed.shape, input_data.shape
+        # input_data = np.roll(input_data, -3, axis=1)
+        # input_data[0][-3:][:] = observation_processed
         # print input_data[0]
-        # TODO: assert rolling is correct
         # print np.sum(input_data[0][11]), np.sum(input_data[0][0])
         
         if gpu_on:
@@ -235,11 +232,14 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
         policy_action_history.append(output_prop[action_label])
         action_label_history.append(action_label)
         entropy += -0.01 * F.sum(output_prop * F.log(output_prop))
+        reward = 0
+        for item in range(num_of_frames_in_input):
+            observation, temp_reward, done, _ = env.step(action)
+            if render: env.render()
+            reward += temp_reward
+            observation_processed = process_observation_2(observation)
+            input_data[0][3 * item: 3 * (item + 1)][:] = observation_processed
 
-        if reward != 0:
-            num_of_games += 1
-
-        observation, reward, done, info = env.step(action)
         time_step_index += 1
         reward_history.append(reward)
         reward_sum += reward
@@ -281,7 +281,9 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
             sum_diff_v += np.sum(diff_v.data)
             diff = F.sum(diff_p + diff_v * 0.5)   # FIXME: good to simply do sum?
             # end = time.time(); print "process_id = %d, 1: time = %f" % (process_id, end - start); start = time.time()
+            # start = time.time()
             diff.backward()       
+            # end = time.time(); accum_time += (end-start)
             # end = time.time(); print "process_id = %d, 2: time = %f" % (process_id, end - start); start = time.time()
             # print model._cnn_net.conv_1.W.grad[0][0][0:3]
             # print model._policy_net.fully_conn_2.W.grad[0][:10]
@@ -294,14 +296,13 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
                     # print "process_id = %d" % process_id
                     # print np.frombuffer(shared_weight_list[0][0], dtype=ctypes.c_float)[0:10]
                     # print shared_model._cnn_net.conv_1.W.data[0][0][0]
-                    # time.sleep(4)
                     shared_model.update()
+                    
                 # print np.frombuffer(shared_rmsprop_params[0]['/conv_1/b'], dtype=ctypes.c_float)
                 model = copy.deepcopy(shared_model)
                 # model.set_all_weight_list(shared_model.get_all_weight_list())
                 model.cleargrads()
             
-            num_of_games = 0
             input_history, action_label_history, reward_history, policy_history, \
                             value_history, policy_action_history = [], [], [], [], [], []
 
@@ -313,11 +314,12 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
                 print "process_id = %d, epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
                         (process_id, index_epoch.value, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
                 print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
+                # print "accum_time = %f" % accum_time; accum_time = 0
+                # print datetime.datetime.now()
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
                 observation = env.reset()
                 index_epoch.value += 1
-                action_label_sum = np.zeros(3)
                 action_label_len = 0
 
 
