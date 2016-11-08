@@ -1,7 +1,6 @@
 import numpy as np
 import cPickle as pickle
-import gym, argparse, os, chainer
-from datetime import datetime
+import gym, argparse, os, chainer, datetime
 from chainer import cuda, Function, gradient_check, Variable, optimizers, serializers, utils
 from chainer import Link, Chain, ChainList
 import chainer.functions as F
@@ -173,7 +172,7 @@ class Value_net(Chain):
 
 def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_reward, index_epoch):
     env = gym.make("Pong-v0")
-    gpu_on = 0   # FIXME: still problems for gpu
+    gpu_on = args.gpu_on   # FIXME: still problems for gpu
     observation = env.reset()
     print "start_reward = %f" % running_reward.value
     shared_model = A3C()
@@ -192,8 +191,6 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
     model.cleargrads() 
     shared_model.cleargrads()
     render = args.render
-    # index_epoch = 0
-    discount_rate = 0.99
     
     reward_sum = 0
     reward = 0
@@ -210,6 +207,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
     sum_diff_p = 0
     sum_diff_v = 0
     entropy = 0
+    last_checkpoint_time = time.time()
 
     while True:
         if render:
@@ -248,12 +246,13 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
         if (done) or time_step_index >= t_max:
             action_label_len += len(action_label_history)
 
-            if index_epoch.value % 100 == 0 and index_epoch.value != 0 and done:
+            if time.time() - last_checkpoint_time > 1000 and done and process_id == 0:  # save every 1000 seconds
                 filename = 'excited_%d.pkl' % index_epoch.value
                 if os.path.isfile(filename):  # backup file if previous one exists
                     os.rename(filename, filename.split('.pkl')[0] + "_bak_" + datetime.datetime.now().strftime(
                         "%Y_%m_%d_%H_%M_%S") + '.pkl')
                 pickle.dump(shared_model, open(filename, 'wb'))
+                last_checkpoint_time = time.time()
 
             average_policy = np.mean([_2.data for _2 in policy_history], axis=0)
             average_value = np.mean([_2.data for _2 in value_history])
@@ -281,14 +280,16 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
             sum_diff_p += np.sum(diff_p.data)
             sum_diff_v += np.sum(diff_v.data)
             diff = F.sum(diff_p + diff_v * 0.5)   # FIXME: good to simply do sum?
-            diff.backward()         # FIXME: 1. is grad accumulated?  2. does grad backprop to the CNN?
+            # end = time.time(); print "process_id = %d, 1: time = %f" % (process_id, end - start); start = time.time()
+            diff.backward()       
+            # end = time.time(); print "process_id = %d, 2: time = %f" % (process_id, end - start); start = time.time()
             # print model._cnn_net.conv_1.W.grad[0][0][0:3]
             # print model._policy_net.fully_conn_2.W.grad[0][:10]
             # print model._value_net.fully_conn_2.W.grad[0][:10]
 
             if args.train:
                 with lock_1:
-                    shared_model.cleargrads()
+                    # shared_model.cleargrads()
                     shared_model.set_all_grad_list(model.get_all_grad_list())
                     # print "process_id = %d" % process_id
                     # print np.frombuffer(shared_weight_list[0][0], dtype=ctypes.c_float)[0:10]
@@ -312,7 +313,6 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
                 print "process_id = %d, epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
                         (process_id, index_epoch.value, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
                 print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
-                time.sleep(0.5)
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
                 observation = env.reset()
@@ -332,6 +332,7 @@ if __name__ == '__main__':
     parser.add_argument("--train", type=int, default=1)
     parser.add_argument("--shared_opt", type=int, default=1)
     parser.add_argument("--start_index", type=int, default=0)
+    parser.add_argument("--gpu_on", type=int,default=0)
     args = parser.parse_args()
 
     lock_1 = mp.Lock()
@@ -341,6 +342,7 @@ if __name__ == '__main__':
         shared_model = A3C()
     else:
         shared_model = pickle.load(open(args.resume_file, 'rb'))
+        print "model %s loaded" % (args.resume_file)
 
     shared_weight_list = [[mp.RawArray(ctypes.c_float, item) for item in weights] 
                                         for weights in shared_model.get_all_weight_list()]
