@@ -10,14 +10,6 @@ import copy
 import time, ctypes
 import multiprocessing as mp
 
-def process_observation(observation):
-    # return observation[::2,::2,0] / 256.0
-    observation = observation[35:195]
-    observation[observation == 144] = 0  # erase background (background type 1)
-    observation[observation == 109] = 0  # erase background (background type 2)
-    observation[observation != 0] = 1  # everything else (paddles, ball) just set to 1
-    observation = np.array([[observation[::2,::2,0]]]).astype(np.float32)
-    return observation
 
 def process_observation_2(observation):
     observation = observation[35:195][::2,::2] / 255.0
@@ -27,7 +19,6 @@ def process_observation_2(observation):
 
 
 def discount_rewards(r, initial_v_value):
-    """ take 1D float array of rewards and compute discounted reward """
     discounted_r = np.zeros_like(r)
     running_add = initial_v_value
     for t in reversed(xrange(0, r.size)):
@@ -69,7 +60,7 @@ class A3C(object):
         self._policy_net = policy_net
         self._value_net = value_net
         self._optimizer_p = optimizer_p
-        self._optimizer_v = optimizer_v     # FIXME: do we need two optimizers?
+        self._optimizer_v = optimizer_v 
         self._optimizer_c = optimizer_c
         self._optimizer_p.setup(self._policy_net)
         self._optimizer_v.setup(self._value_net)
@@ -180,11 +171,11 @@ class Value_net(Chain):
         return output
 
 
-def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_reward):
+def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_reward, index_epoch):
     env = gym.make("Pong-v0")
     gpu_on = 0   # FIXME: still problems for gpu
     observation = env.reset()
-    print "starting_running_reward = %f" % running_reward.value
+    print "start_reward = %f" % running_reward.value
     shared_model = A3C()
 
     shared_model.set_all_weight_list([[np.frombuffer(item, dtype=ctypes.c_float) for item in weights] for weights in shared_weight_list])
@@ -201,7 +192,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
     model.cleargrads() 
     shared_model.cleargrads()
     render = args.render
-    index_epoch = 0
+    # index_epoch = 0
     discount_rate = 0.99
     
     reward_sum = 0
@@ -257,8 +248,12 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
         if (done) or time_step_index >= t_max:
             action_label_len += len(action_label_history)
 
-            if index_epoch % 100 == 0 and index_epoch != 0 and process_id == 0 and done:
-                pickle.dump(shared_model, open('excited_%d.pkl' % index_epoch, 'wb'))
+            if index_epoch.value % 100 == 0 and index_epoch.value != 0 and done:
+                filename = 'excited_%d.pkl' % index_epoch.value
+                if os.path.isfile(filename):  # backup file if previous one exists
+                    os.rename(filename, filename.split('.pkl')[0] + "_bak_" + datetime.datetime.now().strftime(
+                        "%Y_%m_%d_%H_%M_%S") + '.pkl')
+                pickle.dump(shared_model, open(filename, 'wb'))
 
             average_policy = np.mean([_2.data for _2 in policy_history], axis=0)
             average_value = np.mean([_2.data for _2 in value_history])
@@ -278,12 +273,9 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
                 # print discounted_reward_history[_1], value_history[_1].data, policy_action_history[_1].data
                 diff_p += (discounted_reward_history[_1] - value_history[_1].data) * F.log(policy_action_history[_1])
                 diff_v += (discounted_reward_history[_1] - value_history[_1]) ** 2
-
-            # diff_p = (discounted_reward_history - value_history.data) * F.log(policy_history) # FIXME: positive or negative?
             
             diff_p += entropy
-            if args.reverse_grad:
-                diff_p = - diff_p
+            diff_p = - diff_p
             # diff_v = (Variable(discounted_reward_history) - value_history) ** 2
             # print diff_p.data.shape, diff_v.data.shape
             sum_diff_p += np.sum(diff_p.data)
@@ -316,36 +308,35 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
             time_step_index = 0
             
             if done:
-                with lock_2:
-                    running_reward.value = running_reward.value * 0.99 + reward_sum * 0.01 
+                running_reward.value = running_reward.value * 0.99 + reward_sum * 0.01 
                 print "process_id = %d, epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
-                        (process_id, index_epoch, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
+                        (process_id, index_epoch.value, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
                 print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
                 time.sleep(0.5)
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
                 observation = env.reset()
-                index_epoch += 1
+                index_epoch.value += 1
                 action_label_sum = np.zeros(3)
                 action_label_len = 0
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--starting_running_reward", type=float, default=-21.0)
+    parser.add_argument("--start_reward", type=float, default=-21.0)
     parser.add_argument("--lr", type=float, default=0.0005)
     parser.add_argument("--resume_file", type=str, default=None)
     parser.add_argument("--render", type=int, default=0)
-    parser.add_argument("--reverse_grad", type=int, default=0)
     parser.add_argument("--t_max", type=int, default=5)
     parser.add_argument("--process_num", type=int, default=5)
     parser.add_argument("--train", type=int, default=1)
     parser.add_argument("--shared_opt", type=int, default=1)
+    parser.add_argument("--start_index", type=int, default=0)
     args = parser.parse_args()
 
     lock_1 = mp.Lock()
-    lock_2 = mp.Lock()
-    running_reward = mp.Value(ctypes.c_float, args.starting_running_reward)
+    running_reward = mp.Value(ctypes.c_float, args.start_reward)
+    index_epoch = mp.Value(ctypes.c_int, args.start_index)
     if args.resume_file is None:
         shared_model = A3C()
     else:
@@ -362,7 +353,8 @@ if __name__ == '__main__':
 
     processes = [[]] * args.process_num
     for item in range(args.process_num):
-        processes[item] = mp.Process(target=run_process, args=(item, shared_weight_list, shared_rmsprop_params, running_reward))
+        processes[item] = mp.Process(target=run_process, 
+            args=(item, shared_weight_list, shared_rmsprop_params, running_reward, index_epoch))
 
     for item in processes:
         item.start()
