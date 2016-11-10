@@ -9,6 +9,14 @@ import copy
 import time, ctypes
 import multiprocessing as mp
 
+num_of_frames_in_input = 2
+in_channel = 256
+
+def process_observation(observation):
+    observation = observation[35:195][::2,::2,0] / 255.0
+    # observation = .299 * observation[:,:,0] + .587 * observation[:,:,1] + .114 * observation[:,:,2] 
+    observation = np.array(observation).astype(np.float32)
+    return observation
 
 def process_observation_2(observation):
     observation = observation[35:195][::2,::2] / 255.0
@@ -48,7 +56,6 @@ class A3C(object):
     def __init__(self, cnn_net=None, policy_net=None, value_net=None, 
                  optimizer_p=None, optimizer_v=None, optimizer_c= None):
         if cnn_net is None: cnn_net = CNN()
-        in_channel = 200
         if policy_net is None: policy_net = Policy_net(in_channel)
         if value_net is None: value_net = Value_net(in_channel)
         if optimizer_p is None: optimizer_p = optimizers.RMSprop(lr=args.lr, alpha=0.99, eps=0.1)
@@ -72,10 +79,10 @@ class A3C(object):
         self._value_net.to_gpu()
         return
 
-    def cleargrads(self):
-        self._cnn_net.cleargrads()
-        self._policy_net.cleargrads()
-        self._value_net.cleargrads()
+    def zerograds(self):
+        self._cnn_net.zerograds()
+        self._policy_net.zerograds()
+        self._value_net.zerograds()
         return
 
     def get_state(self, input_data):
@@ -130,21 +137,21 @@ class A3C(object):
 
 
 class CNN(Chain):
-    def __init__(self, input_channel = 12):
+    def __init__(self, input_channel = num_of_frames_in_input):
         super(CNN, self).__init__(
             conv_1=L.Convolution2D(input_channel, 32, 8, stride=4),
             conv_2=L.Convolution2D(32, 32, 4, stride=2),
             # conv_3=L.Convolution2D(32, 64, 4, stride=1),
-            fully_conn_1 = L.Linear(2048,200)
+            fully_conn_1 = L.Linear(512, in_channel)
         )
 
     def __call__(self, x_data):
         output = Variable(x_data)
         output = F.relu(self.conv_1(output))
+        output = F.max_pooling_2d(output, 2, 2)
         output = F.relu(self.conv_2(output))
         # output = F.relu(self.conv_3(output))
         output = F.relu(self.fully_conn_1(output))
-        # note that no pooling layers are included, since translation is important for most games
         return output
 
         
@@ -170,7 +177,7 @@ class Value_net(Chain):
         return output
 
 
-def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_reward, index_epoch):
+def run_process(process_id, shared_weight_list, shared_rmsprop_params):
     env = gym.make("Pong-v0")
     gpu_on = args.gpu_on   # FIXME: still problems for gpu
     observation = env.reset()
@@ -188,8 +195,8 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
         model.to_gpu()
         shared_model.to_gpu()
 
-    model.cleargrads() 
-    shared_model.cleargrads()
+    model.zerograds() 
+    shared_model.zerograds()
     render = args.render
     
     reward_sum = 0
@@ -197,8 +204,8 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
     input_history, action_label_history, reward_history, policy_history, \
                             value_history, policy_action_history = [], [], [], [], [], []
     action_label_len = 0
-    num_of_frames_in_input = 4
-    input_data = np.zeros((1, num_of_frames_in_input * 3, 80, 80)).astype(np.float32)
+    # input_data = np.zeros((1, num_of_frames_in_input * 3, 80, 80)).astype(np.float32)
+    input_data = np.zeros((1, num_of_frames_in_input, 80, 80)).astype(np.float32)
     image_index = 0
     time_step_index = 0
     t_max = args.t_max
@@ -209,8 +216,6 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
     accum_time = 0
 
     while True:
-        
-
         # observation_processed = process_observation_2(observation)
         # # print observation_processed.shape, input_data.shape
         # input_data = np.roll(input_data, -3, axis=1)
@@ -237,8 +242,9 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
             observation, temp_reward, done, _ = env.step(action)
             if render: env.render()
             reward += temp_reward
-            observation_processed = process_observation_2(observation)
-            input_data[0][3 * item: 3 * (item + 1)][:] = observation_processed
+            observation_processed = process_observation(observation)
+            # input_data[0][3 * item: 3 * (item + 1)][:] = observation_processed
+            input_data[0][item][:] = observation_processed
 
         time_step_index += 1
         reward_history.append(reward)
@@ -247,7 +253,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
             action_label_len += len(action_label_history)
 
             if time.time() - last_checkpoint_time > 1000 and done and process_id == 0:  # save every 1000 seconds
-                filename = 'excited_%d.pkl' % index_epoch.value
+                filename = 'excited_%d.pkl' % accumulated_num_frames.value
                 if os.path.isfile(filename):  # backup file if previous one exists
                     os.rename(filename, filename.split('.pkl')[0] + "_bak_" + datetime.datetime.now().strftime(
                         "%Y_%m_%d_%H_%M_%S") + '.pkl')
@@ -260,7 +266,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
             # print value_history.data, policy_history.data
             # print policy_history, value_history, policy_history.data.shape, value_history.data.shape
             if (done):
-                input_data = np.zeros((1, 4 * 3, 80, 80)).astype(np.float32)  # reset inputs
+                # input_data = np.zeros((1, 4 * 3, 80, 80)).astype(np.float32)  # FIXME: is it needed to reset inputs?
                 initial_v_value = 0 
             else:
                 initial_v_value = value_history[-1].data 
@@ -291,7 +297,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
 
             if args.train:
                 with lock_1:
-                    # shared_model.cleargrads()
+                    # shared_model.zerograds()
                     shared_model.set_all_grad_list(model.get_all_grad_list())
                     # print "process_id = %d" % process_id
                     # print np.frombuffer(shared_weight_list[0][0], dtype=ctypes.c_float)[0:10]
@@ -301,7 +307,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
                 # print np.frombuffer(shared_rmsprop_params[0]['/conv_1/b'], dtype=ctypes.c_float)
                 model = copy.deepcopy(shared_model)
                 # model.set_all_weight_list(shared_model.get_all_weight_list())
-                model.cleargrads()
+                model.zerograds()
             
             input_history, action_label_history, reward_history, policy_history, \
                             value_history, policy_action_history = [], [], [], [], [], []
@@ -311,15 +317,17 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params, running_r
             
             if done:
                 running_reward.value = running_reward.value * 0.99 + reward_sum * 0.01 
-                print "process_id = %d, epoch #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
-                        (process_id, index_epoch.value, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
-                print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
+                accumulated_num_frames.value += action_label_len
+                print "process_id = %d, step #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
+                        (process_id, accumulated_num_frames.value, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
+                # print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
                 # print "accum_time = %f" % accum_time; accum_time = 0
                 # print datetime.datetime.now()
+                print "time per step = %f" % ((time.time() - start_time ) / accumulated_num_frames.value)
+                time.sleep(0.1)
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
                 observation = env.reset()
-                index_epoch.value += 1
                 action_label_len = 0
 
 
@@ -333,13 +341,15 @@ if __name__ == '__main__':
     parser.add_argument("--process_num", type=int, default=5)
     parser.add_argument("--train", type=int, default=1)
     parser.add_argument("--shared_opt", type=int, default=1)
-    parser.add_argument("--start_index", type=int, default=0)
+    parser.add_argument("--start_step", type=int, default=0)
     parser.add_argument("--gpu_on", type=int,default=0)
     args = parser.parse_args()
 
+    start_time = time.time()
+
     lock_1 = mp.Lock()
     running_reward = mp.Value(ctypes.c_float, args.start_reward)
-    index_epoch = mp.Value(ctypes.c_int, args.start_index)
+    accumulated_num_frames = mp.Value(ctypes.c_int, args.start_step)
     if args.resume_file is None:
         shared_model = A3C()
     else:
@@ -358,7 +368,7 @@ if __name__ == '__main__':
     processes = [[]] * args.process_num
     for item in range(args.process_num):
         processes[item] = mp.Process(target=run_process, 
-            args=(item, shared_weight_list, shared_rmsprop_params, running_reward, index_epoch))
+            args=(item, shared_weight_list, shared_rmsprop_params))
 
     for item in processes:
         item.start()
