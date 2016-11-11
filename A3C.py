@@ -223,8 +223,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
         # print input_data[0]
         # print np.sum(input_data[0][11]), np.sum(input_data[0][0])
         
-        if gpu_on:
-            input_data = cuda.to_gpu(input_data)
+        if gpu_on: input_data = cuda.to_gpu(input_data)
 
         # input_history.append(input_data)
         output_state = model.get_state(input_data)
@@ -232,7 +231,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
         output_value = model.get_value(output_state)[0][0]
         policy_history.append(output_prop)
         value_history.append(output_value)
-        action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data)
+        action = np.random.choice(np.array([0, 2, 3]), size = 1, p=cuda.to_cpu(output_prop.data))
         action_label = int(max([action - 1, 0]))
         policy_action_history.append(output_prop[action_label])
         action_label_history.append(action_label)
@@ -244,6 +243,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
             reward += temp_reward
             observation_processed = process_observation(observation)
             # input_data[0][3 * item: 3 * (item + 1)][:] = observation_processed
+            if gpu_on: observation_processed = cuda.to_gpu(observation_processed)
             input_data[0][item][:] = observation_processed
 
         time_step_index += 1
@@ -260,8 +260,8 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
                 pickle.dump(shared_model, open(filename, 'wb'))
                 last_checkpoint_time = time.time()
 
-            average_policy = np.mean([_2.data for _2 in policy_history], axis=0)
-            average_value = np.mean([_2.data for _2 in value_history])
+            average_policy = np.mean([cuda.to_cpu(_2.data) for _2 in policy_history], axis=0)
+            average_value = np.mean([cuda.to_cpu(_2.data) for _2 in value_history])
             # policy_history = policy_history[np.arange(time_step_index), action_label_history]
             # print value_history.data, policy_history.data
             # print policy_history, value_history, policy_history.data.shape, value_history.data.shape
@@ -323,8 +323,8 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
                 # print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
                 # print "accum_time = %f" % accum_time; accum_time = 0
                 # print datetime.datetime.now()
-                print "time per step = %f" % ((time.time() - start_time ) / accumulated_num_frames.value)
-                time.sleep(0.1)
+                print "time per M step = %f h" % ((time.time() - start_time ) * 1000000 / 3600 / accumulated_num_frames.value)
+                # time.sleep(0.1)
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
                 observation = env.reset()
