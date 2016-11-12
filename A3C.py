@@ -10,18 +10,18 @@ import time, ctypes
 import multiprocessing as mp
 
 num_of_frames_in_input = 2
+num_channels_in_each_frame = 3
 in_channel = 256
 
 def process_observation(observation):
-    observation = observation[35:195][::2,::2,0] / 255.0
-    # observation = .299 * observation[:,:,0] + .587 * observation[:,:,1] + .114 * observation[:,:,2] 
-    observation = np.array(observation).astype(np.float32)
-    return observation
-
-def process_observation_2(observation):
-    observation = observation[35:195][::2,::2] / 255.0
-    observation = np.array(observation).astype(np.float32)
-    observation = np.rollaxis(observation, 2, 0)
+    if num_channels_in_each_frame == 1:
+        observation = observation[35:195][::2,::2,0] / 255.0
+        observation = np.array(observation).astype(np.float32)
+    elif num_channels_in_each_frame == 3:
+        observation = observation[35:195][::2,::2] / 255.0
+        observation = np.array(observation).astype(np.float32)
+        observation = np.rollaxis(observation, 2, 0)
+    
     return observation
 
 
@@ -137,7 +137,7 @@ class A3C(object):
 
 
 class CNN(Chain):
-    def __init__(self, input_channel = num_of_frames_in_input):
+    def __init__(self, input_channel = num_of_frames_in_input * num_channels_in_each_frame):
         super(CNN, self).__init__(
             conv_1=L.Convolution2D(input_channel, 32, 8, stride=4),
             conv_2=L.Convolution2D(32, 32, 4, stride=2),
@@ -205,7 +205,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
                             value_history, policy_action_history = [], [], [], [], [], []
     action_label_len = 0
     # input_data = np.zeros((1, num_of_frames_in_input * 3, 80, 80)).astype(np.float32)
-    input_data = np.zeros((1, num_of_frames_in_input, 80, 80)).astype(np.float32)
+    input_data = np.zeros((1, num_of_frames_in_input * num_channels_in_each_frame, 80, 80)).astype(np.float32)
     image_index = 0
     time_step_index = 0
     t_max = args.t_max
@@ -242,9 +242,8 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
             if render: env.render()
             reward += temp_reward
             observation_processed = process_observation(observation)
-            # input_data[0][3 * item: 3 * (item + 1)][:] = observation_processed
             if gpu_on: observation_processed = cuda.to_gpu(observation_processed)
-            input_data[0][item][:] = observation_processed
+            input_data[0][item * num_channels_in_each_frame : (item + 1) * num_channels_in_each_frame][:] = observation_processed
 
         time_step_index += 1
         reward_history.append(reward)
