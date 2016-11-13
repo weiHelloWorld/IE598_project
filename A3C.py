@@ -306,14 +306,14 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
             if args.train:
                 with lock_1:
                     # shared_model.zerograds()
-                    with cuda.get_device(1):
-                        # shared_model.set_all_weight_list(cuda.to_gpu(np.frombuffer(shared_weight_list, dtype=ctypes.c_float)))
-                        shared_model.set_all_grad_list(model.get_all_grad_list())
-                        # print "process_id = %d" % process_id
-                        # print np.frombuffer(shared_weight_list[1][0], dtype=ctypes.c_float)[0:10]
-                        # print shared_model._cnn_net.conv_1.W.data[0][0][0]
-                        shared_model.update()
-                        # shared_weight_list[:] = cuda.to_cpu(shared_model.get_all_weight_list())
+                    # with cuda.get_device(1):
+                    # shared_model.set_all_weight_list(cuda.to_gpu(np.frombuffer(shared_weight_list, dtype=ctypes.c_float)))
+                    shared_model.set_all_grad_list(model.get_all_grad_list())
+                    # print "process_id = %d" % process_id
+                    # print np.frombuffer(shared_weight_list[1][0], dtype=ctypes.c_float)[0:10]
+                    # print shared_model._cnn_net.conv_1.W.data[0][0][0]
+                    shared_model.update()
+                    # shared_weight_list[:] = cuda.to_cpu(shared_model.get_all_weight_list())
 
                     
                 # print np.frombuffer(shared_rmsprop_params[0]['/conv_1/b'], dtype=ctypes.c_float)
