@@ -8,6 +8,7 @@ import chainer.links as L
 import copy
 import time, ctypes
 import multiprocessing as mp
+import cupy
 
 num_of_frames_in_input = 2
 num_channels_in_each_frame = 3
@@ -34,14 +35,17 @@ def discount_rewards(r, initial_v_value):
    
     return discounted_r
 
-def get_all_weights(chain):
-        return [item.data.flatten() for item in chain.params()]
+def get_all_weights(chain, in_cpu=True):
+    temp = [item.data.flatten() for item in chain.params()]
+    return np.concatenate(temp) if in_cpu else cupy.concatenate(temp)
 
-def set_all_weights(chain, weight_list):
-    for index, item in enumerate(chain.params()):
-        assert (item.data.flatten().shape[0] == weight_list[index].shape[0])
-        item.data = weight_list[index].reshape(item.data.shape)
-    return
+def set_all_weights(chain, weight_list, start_index):
+    # start_index = 0
+    for item in chain.params():
+        end_index = start_index + item.data.flatten().shape[0]
+        item.data = weight_list[start_index: end_index].reshape(item.data.shape)
+        start_index = end_index
+    return end_index
 
 def get_all_grads(chain):
     return [item.grad.flatten() for item in chain.params()]
@@ -73,10 +77,10 @@ class A3C(object):
         self._optimizer_c.setup(self._cnn_net)
         return
 
-    def to_gpu(self):
-        self._cnn_net.to_gpu()
-        self._policy_net.to_gpu()
-        self._value_net.to_gpu()
+    def to_gpu(self, gpu_id=0):
+        self._cnn_net.to_gpu(gpu_id)
+        self._policy_net.to_gpu(gpu_id)
+        self._value_net.to_gpu(gpu_id)
         return
 
     def zerograds(self):
@@ -111,13 +115,18 @@ class A3C(object):
         # print self._cnn_net.conv_1.W.data[0][0][0][0], self._policy_net.fully_conn_1.W.data[0][0], self._value_net.fully_conn_1.W.data[0][0]
         return
 
+    def in_cpu(self):
+        return self._cnn_net._cpu
+
     def get_all_weight_list(self):
-        return [get_all_weights(item) for item in [self._cnn_net, self._policy_net, self._value_net]]
+        temp = [get_all_weights(item, self.in_cpu()) for item in [self._cnn_net, self._policy_net, self._value_net]]
+        return np.concatenate(temp) if self.in_cpu() else cupy.concatenate(temp)
 
     def set_all_weight_list(self, weight_list_list):
-        set_all_weights(self._cnn_net, weight_list_list[0])
-        set_all_weights(self._policy_net, weight_list_list[1])
-        set_all_weights(self._value_net, weight_list_list[2])
+        start_index = 0
+        for item in [self._cnn_net, self._policy_net, self._value_net]:
+            start_index = set_all_weights(item, weight_list_list, start_index)
+        assert (start_index == weight_list_list.shape[0])
         return
 
     def get_all_grad_list(self):
@@ -184,7 +193,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
     print "start_reward = %f" % running_reward.value
     shared_model = A3C()
 
-    shared_model.set_all_weight_list([[np.frombuffer(item, dtype=ctypes.c_float) for item in weights] for weights in shared_weight_list])
+    shared_model.set_all_weight_list(np.frombuffer(shared_weight_list, dtype=ctypes.c_float) )
     if args.shared_opt:
         shared_model.set_optimizer_params(shared_rmsprop_params)
         print "shared_opt enabled"
@@ -193,7 +202,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
 
     if gpu_on:
         model.to_gpu()
-        shared_model.to_gpu()
+        shared_model.to_gpu(1)
 
     model.zerograds() 
     shared_model.zerograds()
@@ -297,17 +306,14 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
             if args.train:
                 with lock_1:
                     # shared_model.zerograds()
-                    shared_model.set_all_weight_list([[cuda.to_gpu(np.frombuffer(item, dtype=ctypes.c_float)) for item in weights] for weights in shared_weight_list])
+                    shared_model.set_all_weight_list(cuda.to_gpu(np.frombuffer(shared_weight_list, dtype=ctypes.c_float)))
                     shared_model.set_all_grad_list(model.get_all_grad_list())
                     # print "process_id = %d" % process_id
                     # print np.frombuffer(shared_weight_list[1][0], dtype=ctypes.c_float)[0:10]
                     # print shared_model._cnn_net.conv_1.W.data[0][0][0]
                     shared_model.update()
                     if process_id > -1:
-                        temp_shared_weight_list = shared_model.get_all_weight_list()
-                        for _1 in range(len(temp_shared_weight_list)):
-                            for _2 in range(len(temp_shared_weight_list[_1])):
-                                shared_weight_list[_1][_2][:] = cuda.to_cpu(temp_shared_weight_list[_1][_2])
+                        shared_weight_list[:] = cuda.to_cpu(shared_model.get_all_weight_list())
 
                     
                 # print np.frombuffer(shared_rmsprop_params[0]['/conv_1/b'], dtype=ctypes.c_float)
@@ -362,8 +368,7 @@ if __name__ == '__main__':
         shared_model = pickle.load(open(args.resume_file, 'rb'))
         print "model %s loaded" % (args.resume_file)
 
-    shared_weight_list = [[mp.RawArray(ctypes.c_float, item) for item in weights] 
-                                        for weights in shared_model.get_all_weight_list()]
+    shared_weight_list = mp.RawArray(ctypes.c_float, shared_model.get_all_weight_list())
 
     shared_rmsprop_params = [[]] * 3
     for _1, rms_optimizer in enumerate(shared_model.get_all_optimizers()):
