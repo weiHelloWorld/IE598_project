@@ -1,4 +1,7 @@
 *.pkl
 nohup.out
 archive/**
+*.ipynb
+temp_*.py
+transfer.sh
 
