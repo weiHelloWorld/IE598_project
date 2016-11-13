@@ -8,7 +8,11 @@ import chainer.links as L
 import copy
 import time, ctypes
 import multiprocessing as mp
-import cupy
+
+try:
+    import cupy
+except Exception as e:
+    pass
 
 num_of_frames_in_input = 2
 num_channels_in_each_frame = 3
