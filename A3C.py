@@ -17,6 +17,7 @@ except Exception as e:
 num_of_frames_in_input = 2
 num_channels_in_each_frame = 3
 in_channel = 256
+game_name = "Pong-v0"
 
 def process_observation(observation):
     if num_channels_in_each_frame == 1:
@@ -191,16 +192,14 @@ class Value_net(Chain):
 
 
 def run_process(process_id, shared_weight_list, shared_rmsprop_params):
-    env = gym.make("Pong-v0")
+    env = gym.make(game_name)
     gpu_on = args.gpu_on   # FIXME: still problems for gpu
     observation = env.reset()
-    print "start_reward = %f" % running_reward.value
     shared_model = A3C()
 
     shared_model.set_all_weight_list(np.frombuffer(shared_weight_list, dtype=ctypes.c_float) )
     if args.shared_opt:
         shared_model.set_optimizer_params(shared_rmsprop_params)
-        print "shared_opt enabled"
 
     model = copy.deepcopy(shared_model)
 
@@ -340,7 +339,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
                 # print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
                 # print "accum_time = %f" % accum_time; accum_time = 0
                 # print datetime.datetime.now()
-                print "time per M step = %f h" % ((time.time() - start_time ) * 1000000 / 3600 / accumulated_num_frames.value)
+                print "time per M step = %f h" % ((time.time() - start_time ) * 1000000 / 3600 / (accumulated_num_frames.value - args.start_step))
                 # time.sleep(0.1)
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
@@ -360,6 +359,7 @@ if __name__ == '__main__':
     parser.add_argument("--shared_opt", type=int, default=1)
     parser.add_argument("--start_step", type=int, default=0)
     parser.add_argument("--gpu_on", type=int,default=0)
+    parser.add_argument("--record", type=int,default=0, help="record performance")
     args = parser.parse_args()
 
     start_time = time.time()
@@ -367,6 +367,7 @@ if __name__ == '__main__':
     lock_1 = mp.Lock()
     running_reward = mp.Value(ctypes.c_float, args.start_reward)
     accumulated_num_frames = mp.Value(ctypes.c_int, args.start_step)
+    print "start_reward = %f" % running_reward.value
     if args.resume_file is None:
         shared_model = A3C()
     else:
@@ -381,14 +382,40 @@ if __name__ == '__main__':
         for item in rms_optimizer._states.keys():
             shared_rmsprop_params[_1][item] = mp.RawArray(ctypes.c_float, rms_optimizer._states[item]['ms'].flatten())
 
-    processes = [[]] * args.process_num
-    for item in range(args.process_num):
-        processes[item] = mp.Process(target=run_process, 
-            args=(item, shared_weight_list, shared_rmsprop_params))
+    if not args.record:
+        processes = [[]] * args.process_num
+        for item in range(args.process_num):
+            processes[item] = mp.Process(target=run_process, 
+                args=(item, shared_weight_list, shared_rmsprop_params))
 
-    for item in processes:
-        item.start()
-        
-    for item in processes:
-        item.join()
+        for item in processes:
+            item.start()
+            
+        for item in processes:
+            item.join()
+    else:
+        env = gym.make(game_name)
+        folder_to_record_result = '/tmp/temp'
+        if os.path.exists(folder_to_record_result):
+            os.rename(folder_to_record_result, folder_to_record_result + str(datetime.datetime.now().strftime(
+                        "%Y_%m_%d_%H_%M_%S")))
+
+        env.monitor.start(folder_to_record_result)
+        for _ in range(100):
+            observation = env.reset()
+            done = False
+            input_data = np.zeros((1, num_of_frames_in_input * num_channels_in_each_frame, 80, 80)).astype(np.float32)
+            while True:
+                output_state = shared_model.get_state(input_data)
+                output_prop = shared_model.get_policy(output_state)[0]
+                action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data)
+                for item in range(num_of_frames_in_input):
+                    if not done:
+                        observation, temp_reward, done, _ = env.step(action)
+                        observation_processed = process_observation(observation)
+                        input_data[0][item * num_channels_in_each_frame : (item + 1) * num_channels_in_each_frame][:] = observation_processed
+
+                if done: break
+
+        env.monitor.close()
 
