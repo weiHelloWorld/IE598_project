@@ -94,6 +94,15 @@ class A3C(object):
         self._value_net.zerograds()
         return
 
+    def unchain_LSTM(self):
+        self._cnn_net.lstm.h.unchain_backward()
+        self._cnn_net.lstm.c.unchain_backward()
+        return
+
+    def reset_LSTM(self):
+        self._cnn_net.lstm.reset_state()
+        return
+
     def get_state(self, input_data):
         return self._cnn_net(input_data)
 
@@ -156,7 +165,8 @@ class CNN(Chain):
             conv_1=L.Convolution2D(input_channel, 32, 8, stride=4),
             conv_2=L.Convolution2D(32, 32, 4, stride=2),
             # conv_3=L.Convolution2D(32, 64, 4, stride=1),
-            fully_conn_1 = L.Linear(512, in_channel)
+            fully_conn_1 = L.Linear(512, in_channel),
+            lstm=L.LSTM(in_channel, in_channel)
         )
 
     def __call__(self, x_data):
@@ -166,6 +176,7 @@ class CNN(Chain):
         output = F.relu(self.conv_2(output))
         # output = F.relu(self.conv_3(output))
         output = F.relu(self.fully_conn_1(output))
+        output = self.lstm(output)
         return output
 
         
@@ -300,6 +311,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
             # end = time.time(); print "process_id = %d, 1: time = %f" % (process_id, end - start); start = time.time()
             # start = time.time()
             diff.backward()       
+            model.unchain_LSTM()   # FIXME: where should we put this?  how often should we unchain?
             # end = time.time(); accum_time += (end-start)
             # end = time.time(); print "process_id = %d, 2: time = %f" % (process_id, end - start); start = time.time()
             # print model._cnn_net.conv_1.W.grad[0][0][0:3]
@@ -317,12 +329,10 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
                     # print shared_model._cnn_net.conv_1.W.data[0][0][0]
                     shared_model.update()
                     # shared_weight_list[:] = cuda.to_cpu(shared_model.get_all_weight_list())
-
                     
                 # print np.frombuffer(shared_rmsprop_params[0]['/conv_1/b'], dtype=ctypes.c_float)
                 # model = copy.deepcopy(shared_model)
                 model.set_all_weight_list(cuda.to_gpu(shared_model.get_all_weight_list()))
-                # model.set_all_weight_list(shared_model.get_all_weight_list())
                 model.zerograds()
             
             input_history, action_label_history, reward_history, policy_history, \
@@ -344,6 +354,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
                 observation = env.reset()
+                model.reset_LSTM()   # FIXME
                 action_label_len = 0
 
 
