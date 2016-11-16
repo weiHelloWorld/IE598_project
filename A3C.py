@@ -371,6 +371,7 @@ if __name__ == '__main__':
     parser.add_argument("--start_step", type=int, default=0)
     parser.add_argument("--gpu_on", type=int,default=0)
     parser.add_argument("--record", type=int,default=0, help="record performance")
+    parser.add_argument("--folder_to_record_result", type=str, default='/tmp/temp')
     args = parser.parse_args()
 
     start_time = time.time()
@@ -406,7 +407,7 @@ if __name__ == '__main__':
             item.join()
     else:
         env = gym.make(game_name)
-        folder_to_record_result = '/tmp/temp'
+        folder_to_record_result = args.folder_to_record_result
         if os.path.exists(folder_to_record_result):
             os.rename(folder_to_record_result, folder_to_record_result + str(datetime.datetime.now().strftime(
                         "%Y_%m_%d_%H_%M_%S")))
@@ -420,6 +421,7 @@ if __name__ == '__main__':
                 output_state = shared_model.get_state(input_data)
                 output_prop = shared_model.get_policy(output_state)[0]
                 action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data)
+                shared_model.unchain_LSTM()
                 for item in range(num_of_frames_in_input):
                     if not done:
                         observation, temp_reward, done, _ = env.step(action)
@@ -429,4 +431,5 @@ if __name__ == '__main__':
                 if done: break
 
         env.monitor.close()
+        gym.upload(folder_to_record_result, api_key='sk_JY6Go9lgRT2ebaOtfe6Lw')
 
