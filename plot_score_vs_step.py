@@ -19,5 +19,7 @@ assert (len(running_reward) == len(num_of_steps))
 
 fig, ax = plt.subplots()
 ax.scatter(num_of_steps, running_reward)
+ax.set_xlabel('number of steps')
+ax.set_ylabel('running average of score')
 
 fig.savefig(args.fig_name)
