@@ -16,8 +16,10 @@ except Exception as e:
 
 num_of_frames_in_input = 2
 num_channels_in_each_frame = 3
+possible_actions = [0, 1, 2, 3, 4, 5]
 in_channel = 256
-game_name = "Pong-v0"
+default_start_reward = 0
+game_name = "SpaceInvaders-v0"
 
 def process_observation(observation):
     if num_channels_in_each_frame == 1:
@@ -183,7 +185,7 @@ class CNN(Chain):
 class Policy_net(Chain):
     def __init__(self, input_dim):
         super(Policy_net, self).__init__(
-            fully_conn_2 = L.Linear(input_dim,3)
+            fully_conn_2 = L.Linear(input_dim,len(possible_actions))
         )
     
     def __call__(self, input_data):
@@ -254,14 +256,19 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
         output_value = model.get_value(output_state)[0][0]
         policy_history.append(output_prop)
         value_history.append(output_value)
-        action = np.random.choice(np.array([0, 2, 3]), size = 1, p=cuda.to_cpu(output_prop.data))
-        action_label = int(max([action - 1, 0]))
+        action_label = np.random.choice(np.array(range(len(possible_actions))), size = 1, p=cuda.to_cpu(output_prop.data))[0]
+        action = possible_actions[action_label]
         policy_action_history.append(output_prop[action_label])
         action_label_history.append(action_label)
         entropy += -0.01 * F.sum(output_prop * F.log(output_prop))
         reward = 0
         for item in range(num_of_frames_in_input):
             observation, temp_reward, done, _ = env.step(action)
+            if temp_reward < -1:  # clip reward
+                temp_reward = -1
+            elif temp_reward > 1:
+                temp_reward = 1
+
             if render: env.render()
             reward += temp_reward
             observation_processed = process_observation(observation)
@@ -360,7 +367,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--start_reward", type=float, default=-21.0)
+    parser.add_argument("--start_reward", type=float, default=default_start_reward)
     parser.add_argument("--lr", type=float, default=0.0005)
     parser.add_argument("--resume_file", type=str, default=None)
     parser.add_argument("--render", type=int, default=0)
