@@ -232,6 +232,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
     sum_diff_v = 0
     entropy = 0
     last_checkpoint_time = time.time()
+    previous_observation_processed = None
     accum_time = 0
 
     while True:
@@ -266,7 +267,14 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
 
             if render: env.render()
             reward += temp_reward
-            observation_processed = process_observation(observation)
+            temp_observation_processed = process_observation(observation)
+            if previous_observation_processed is None:
+                observation_processed = temp_observation_processed
+            else:
+                observation_processed = np.maximum(temp_observation_processed, previous_observation_processed)
+                
+            previous_observation_processed = temp_observation_processed
+
             if gpu_on: observation_processed = cuda.to_gpu(observation_processed)
             input_data[0][item * num_channels_in_each_frame : (item + 1) * num_channels_in_each_frame][:] = observation_processed
 
@@ -422,7 +430,8 @@ if __name__ == '__main__':
             while True:
                 output_state = shared_model.get_state(input_data)
                 output_prop = shared_model.get_policy(output_state)[0]
-                action = np.random.choice(np.array([0, 2, 3]), size = 1, p=output_prop.data)
+                action_label = np.random.choice(np.array(range(len(possible_actions))), size = 1, p=(output_prop.data))[0]
+                action = possible_actions[action_label]
                 shared_model.unchain_LSTM()
                 for item in range(num_of_frames_in_input):
                     if not done:

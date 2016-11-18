@@ -1,6 +1,6 @@
 """configuration file"""
 
-num_of_frames_in_input = 2
+num_of_frames_in_input = 4
 num_channels_in_each_frame = 3
 possible_actions = [0, 1, 2, 3, 4, 5]
 in_channel = 256
