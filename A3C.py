@@ -8,18 +8,12 @@ import chainer.links as L
 import copy
 import time, ctypes
 import multiprocessing as mp
+from config import *
 
 try:
     import cupy
 except Exception as e:
     pass
-
-num_of_frames_in_input = 2
-num_channels_in_each_frame = 3
-possible_actions = [0, 1, 2, 3, 4, 5]
-in_channel = 256
-default_start_reward = 0
-game_name = "SpaceInvaders-v0"
 
 def process_observation(observation):
     if num_channels_in_each_frame == 1:
@@ -264,6 +258,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
         reward = 0
         for item in range(num_of_frames_in_input):
             observation, temp_reward, done, _ = env.step(action)
+            reward_sum += temp_reward
             if temp_reward < -1:  # clip reward
                 temp_reward = -1
             elif temp_reward > 1:
@@ -277,7 +272,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
 
         time_step_index += 1
         reward_history.append(reward)
-        reward_sum += reward
+        
         if (done) or time_step_index >= t_max:
             action_label_len += len(action_label_history)
 
