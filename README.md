@@ -18,6 +18,12 @@ We ran A3C method with LSTM on Atari pong game for 65 million steps (41 hours). 
 
 ![](figures/plot_pong.png)
 
+You may also see here for videos:
+
+// TODO
+
+## 
+
 ## Similar github repositories
 
 - https://github.com/coreylynch/async-rl

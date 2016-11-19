@@ -15,12 +15,14 @@ try:
 except Exception as e:
     pass
 
+num_of_rows_in_screenshot = (screen_range[1] - screen_range[0]) / 2
+
 def process_observation(observation):
     if num_channels_in_each_frame == 1:
-        observation = observation[35:195][::2,::2,0] / 255.0
+        observation = observation[screen_range[0]:screen_range[1]][::2,::2,0] / 255.0
         observation = np.array(observation).astype(np.float32)
     elif num_channels_in_each_frame == 3:
-        observation = observation[35:195][::2,::2] / 255.0
+        observation = observation[screen_range[0]:screen_range[1]][::2,::2] / 255.0
         observation = np.array(observation).astype(np.float32)
         observation = np.rollaxis(observation, 2, 0)
     
@@ -224,7 +226,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
                             value_history, policy_action_history = [], [], [], [], [], []
     action_label_len = 0
     # input_data = np.zeros((1, num_of_frames_in_input * 3, 80, 80)).astype(np.float32)
-    input_data = np.zeros((1, num_of_frames_in_input * num_channels_in_each_frame, 80, 80)).astype(np.float32)
+    input_data = np.zeros((1, num_of_frames_in_input * num_channels_in_each_frame, num_of_rows_in_screenshot, 80)).astype(np.float32)
     image_index = 0
     time_step_index = 0
     t_max = args.t_max
@@ -426,7 +428,7 @@ if __name__ == '__main__':
         for _ in range(100):
             observation = env.reset()
             done = False
-            input_data = np.zeros((1, num_of_frames_in_input * num_channels_in_each_frame, 80, 80)).astype(np.float32)
+            input_data = np.zeros((1, num_of_frames_in_input * num_channels_in_each_frame, num_of_rows_in_screenshot, 80)).astype(np.float32)
             while True:
                 output_state = shared_model.get_state(input_data)
                 output_prop = shared_model.get_policy(output_state)[0]

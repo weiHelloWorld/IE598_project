@@ -4,4 +4,5 @@ archive/**
 *.ipynb
 temp_*.py
 transfer.sh
+*.pyc
 
