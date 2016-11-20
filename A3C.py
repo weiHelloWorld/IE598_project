@@ -16,6 +16,8 @@ except Exception as e:
     pass
 
 num_of_rows_in_screenshot = (screen_range[1] - screen_range[0]) / 2
+step_interval_of_updating_lr = 500000
+learning_rate_annealing_factor = 0.9
 
 def process_observation(observation):
     if num_channels_in_each_frame == 1:
@@ -79,6 +81,14 @@ class A3C(object):
         self._optimizer_v.setup(self._value_net)
         self._optimizer_c.setup(self._cnn_net)
         return
+
+    def set_learning_rate(self, learning_rate):
+        for item in self.get_all_optimizers():
+            item.lr = learning_rate
+        return
+
+    def get_learning_rate(self):
+        return self._optimizer_c.lr
 
     def to_gpu(self, gpu_id=0):
         self._cnn_net.to_gpu(gpu_id)
@@ -356,12 +366,24 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
             if done:
                 running_reward.value = running_reward.value * 0.99 + reward_sum * 0.01 
                 accumulated_num_frames.value += action_label_len
+                if running_reward.value > max_running_reward.value:
+                    max_running_reward.value = running_reward.value
+                    step_index_of_max_running_reward.value = accumulated_num_frames.value
+                elif accumulated_num_frames.value - step_index_of_max_running_reward.value > step_interval_of_updating_lr:
+                    step_index_of_max_running_reward.value = accumulated_num_frames.value
+                    current_learning_rate.value *= 0.9
+
+                if shared_model.get_learning_rate() > current_learning_rate.value:
+                    shared_model.set_learning_rate(current_learning_rate.value)
+                    print "new lr = %f" % shared_model.get_learning_rate()
+
                 print "process_id = %d, step #%d, reward_sum = %f, running_reward = %f, average_policy = %s, average_value = %s, num of frames = %d" % \
                         (process_id, accumulated_num_frames.value, reward_sum, running_reward.value, str(average_policy), str(average_value), action_label_len)
                 # print "average diff p = %f, average diff v = %f" % (sum_diff_p / action_label_len, sum_diff_v / action_label_len)
                 # print "accum_time = %f" % accum_time; accum_time = 0
                 # print datetime.datetime.now()
                 print "time per M step = %f h" % ((time.time() - start_time ) * 1000000 / 3600 / (accumulated_num_frames.value - args.start_step))
+                print max_running_reward.value, step_index_of_max_running_reward.value, current_learning_rate.value
                 # time.sleep(0.1)
                 sum_diff_p = 0; sum_diff_v = 0
                 reward_sum = 0
@@ -390,7 +412,11 @@ if __name__ == '__main__':
 
     lock_1 = mp.Lock()
     running_reward = mp.Value(ctypes.c_float, args.start_reward)
+    max_running_reward = mp.Value(ctypes.c_float, args.start_reward)
+    current_learning_rate = mp.Value(ctypes.c_float, args.lr)
+    step_index_of_max_running_reward = mp.Value(ctypes.c_int, args.start_step)
     accumulated_num_frames = mp.Value(ctypes.c_int, args.start_step)
+
     print "start_reward = %f" % running_reward.value
     if args.resume_file is None:
         shared_model = A3C()
