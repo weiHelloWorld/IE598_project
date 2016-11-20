@@ -17,7 +17,7 @@ except Exception as e:
 
 num_of_rows_in_screenshot = (screen_range[1] - screen_range[0]) / 2
 step_interval_of_updating_lr = 500000
-learning_rate_annealing_factor = 0.9
+learning_rate_annealing_factor = 0.7
 
 def process_observation(observation):
     if num_channels_in_each_frame == 1:
@@ -371,7 +371,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
                     step_index_of_max_running_reward.value = accumulated_num_frames.value
                 elif accumulated_num_frames.value - step_index_of_max_running_reward.value > step_interval_of_updating_lr:
                     step_index_of_max_running_reward.value = accumulated_num_frames.value
-                    current_learning_rate.value *= 0.9
+                    current_learning_rate.value *= learning_rate_annealing_factor
 
                 if shared_model.get_learning_rate() > current_learning_rate.value:
                     shared_model.set_learning_rate(current_learning_rate.value)

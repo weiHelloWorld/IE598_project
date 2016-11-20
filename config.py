@@ -3,7 +3,7 @@
 num_of_frames_in_input = 4
 num_channels_in_each_frame = 3
 possible_actions = [0, 1, 2, 3, 4, 5]
-screen_range = [11, 195]
+screen_range = [35, 195]
 in_channel = 256
 default_start_reward = 150
 game_name = "SpaceInvaders-v0"

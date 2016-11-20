@@ -49,7 +49,7 @@ def get_all_grads(chain):
 def set_all_grads(chain, grad_list):
     for index, item in enumerate(chain.params()):
         assert (item.data.flatten().shape[0] == grad_list[index].shape[0])
-        item.grad = grad_list[index].reshape(item.data.shape)
+        item.grad = cuda.to_cpu(grad_list[index]).reshape(item.data.shape) if args.gpu_on else grad_list[index].reshape(item.data.shape)
     return
 
 class A3C(object):
@@ -356,7 +356,7 @@ if __name__ == '__main__':
 
     shared_weight_list = shared_model.get_all_weight_list()
     shared_model = A3C()
-    if args.gpu_on: shared_model.to_gpu()
+    # if args.gpu_on: shared_model.to_gpu()
 
     # shared_model.set_all_weight_list([[np.frombuffer(item, dtype=ctypes.c_float) for item in weights] for weights in shared_weight_list])
     
