@@ -1,9 +1,11 @@
 import argparse
 import matplotlib.pyplot as plt
+import numpy as np
 
 parser = argparse.ArgumentParser()
 parser.add_argument("file", type=str)
 parser.add_argument("--fig_name", type=str, default='plot.png')
+parser.add_argument("--data_file", type=str, default = None)
 args = parser.parse_args()
 
 running_reward = []
@@ -19,6 +21,12 @@ assert (len(running_reward) == len(num_of_steps))
 
 fig, ax = plt.subplots()
 ax.scatter(num_of_steps, running_reward)
+if args.data_file is None:
+	data_file = args.file.replace('.out', '.txt')
+else:
+	data_file = args.data_file
+
+np.savetxt(data_file, np.vstack([num_of_steps, running_reward]))
 ax.set_xlabel('number of steps')
 ax.set_ylabel('running average of score')
 

@@ -15,13 +15,12 @@ try:
 except Exception as e:
     pass
 
-num_of_rows_in_screenshot = (screen_range[1] - screen_range[0]) / 2
-step_interval_of_updating_lr = 500000
-learning_rate_annealing_factor = 0.7
 
 def process_observation(observation):
     if num_channels_in_each_frame == 1:
-        observation = observation[screen_range[0]:screen_range[1]][::2,::2,0] / 255.0
+        observation = observation[screen_range[0]:screen_range[1]][::2,::2] / 255.0
+        observation = observation[:,:,0] * 0.2126 + observation[:,:,1] * 0.0722 \
+                    + observation[:,:,2] * 0.7152                      # Y channel (see Nature paper)
         observation = np.array(observation).astype(np.float32)
     elif num_channels_in_each_frame == 3:
         observation = observation[screen_range[0]:screen_range[1]][::2,::2] / 255.0
@@ -280,7 +279,7 @@ def run_process(process_id, shared_weight_list, shared_rmsprop_params):
             if render: env.render()
             reward += temp_reward
             temp_observation_processed = process_observation(observation)
-            if previous_observation_processed is None:
+            if previous_observation_processed is None or not preprocessing:
                 observation_processed = temp_observation_processed
             else:
                 observation_processed = np.maximum(temp_observation_processed, previous_observation_processed)
