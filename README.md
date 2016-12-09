@@ -14,15 +14,15 @@ We used A3C (asynchronous advantage actor-critic method) with LSTM (long short-t
 
 ## Example output
 
-We ran A3C method with LSTM on Atari pong game for 65 million steps (41 hours).  Here is the graph of running average of scores vs. number of steps:
+Pong:
 
-![](figures/plot_pong.png)
+![](figures/pong.png)
 
-You may also see here for videos:
+Spaceinvaders:
 
-// TODO
+![](figures/spaceinvaders.png)
 
-## 
+Click [here](IE598_project.pdf) for presentation slides.
 
 ## Similar github repositories
 
